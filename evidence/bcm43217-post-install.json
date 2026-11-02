@@ -1,0 +1,156 @@
+{
+  "date_utc": "2026-11-02",
+  "qualification": "CONDITIONAL \u2014 functionality restored; intermittent loss remains",
+  "installed_b43_sha256": "4130be2b5f191189d6534c4d77a2b1f637b3bd1ec185f1a593e8e249d8436006",
+  "mac80211_sha256": "cdcf3316e0220fba0939e7274ae399bfe8c7dbb3deb4ad5c6faac8ee933ba172",
+  "kernel": "6.12.112",
+  "ap": {
+    "band": "2.4 GHz",
+    "channel": 11,
+    "width_mhz": 20,
+    "mode": "legacy b/g, NOHT",
+    "security": "WPA2-CCMP"
+  },
+  "cold_boot": {
+    "PASS": true,
+    "protected_module_configuration_identity_records_verified": 21,
+    "uplink_authorized": true,
+    "gateway_ping": {
+      "sent": 3,
+      "received": 3
+    }
+  },
+  "functionality": {
+    "mac_association": true,
+    "dhcp": true,
+    "bidirectional_128_KiB_SHA256_integrity": true,
+    "wifi_bound_public_https": true
+  },
+  "rejected_experiments": {
+    "external_LNA_gain_port": "No repeatable correction of loss; not promoted",
+    "legacy_TX_chain_selection": "No repeatable correction of loss; not promoted",
+    "software_CCMP": "No meaningful correction of loss; not promoted",
+    "factory_PHY17_base_initialization": {
+      "module_sha256": "7cc357b2ce722d975db83b310972d69cd4ad365e6a6f06d8ce1af1e051b04a9b",
+      "short_test": {
+        "ping_received": 60,
+        "ping_sent": 60,
+        "dns_replies": 20,
+        "dns_requests": 20,
+        "file_integrity_pairs_passed": 6
+      },
+      "extended_122_86_second_test": {
+        "ping_received": 235,
+        "ping_sent": 240,
+        "dns_replies": 39,
+        "dns_requests": 40,
+        "complete_file_integrity_and_https_rounds": 16,
+        "next_round": "Upload exceeded six-second deadline"
+      },
+      "iphone": {
+        "server_recorded_PASS": true,
+        "integrity_rounds_passed": 10,
+        "integrity_rounds_requested": 10,
+        "scope": "Observed during this unpromoted RAM candidate; not proof of installed control qualification"
+      },
+      "router_monitor": {
+        "samples": 100,
+        "duration_seconds": 500,
+        "PASS": true,
+        "scope": "Management, association, memory and CPU/fault gates; not an application-loss gate"
+      },
+      "promoted": false
+    }
+  },
+  "limits": [
+    "No long-term stability claim.",
+    "Station retries and miscellaneous drops remain nonzero.",
+    "No 802.11n or new throughput ceiling claim.",
+    "Historical 5 GHz receive-load stall is not proven eliminated.",
+    "No experimental candidates accumulated in installed control.",
+    "No generic public firmware image or private provisioning is distributed."
+  ],
+  "client_peer_to_peer_comparison": {
+    "router": "Unchanged installed4130; same AP channel and endpoints",
+    "stages": [
+      {
+        "peer_to_peer": "enabled before",
+        "ping_sent": 120,
+        "ping_received": 111,
+        "dns_validated": 24,
+        "dns_requests": 24,
+        "integrity_pairs_passed": 10
+      },
+      {
+        "peer_to_peer": "temporarily disabled",
+        "ping_sent": 120,
+        "ping_received": 118,
+        "dns_validated": 23,
+        "dns_requests": 24,
+        "integrity_pairs_passed": 10
+      },
+      {
+        "peer_to_peer": "restored",
+        "ping_sent": 120,
+        "ping_received": 119,
+        "dns_validated": 24,
+        "dns_requests": 24,
+        "integrity_pairs_passed": 3,
+        "next_pair": "six-second upload timeout"
+      }
+    ],
+    "conclusion": "Residual loss remained; non-counterbalanced short runs do not establish causation or a repeatable benefit. Original client interface state restored."
+  },
+  "diagnostics_only_counter_trial": {
+    "module_sha256": "dcd28f7d5f3f6d18566e1b631581d65cda081e77436e62b1e366d257c4fe5413",
+    "source_control": "All RF source bytes match installed4130; only atomic observer files differ",
+    "ping": {
+      "sent": 120,
+      "received": 118
+    },
+    "validated_dns": {
+      "requests": 24,
+      "passed": 24
+    },
+    "integrity_file_pairs": {
+      "requested": 10,
+      "passed": 10
+    },
+    "router_health_monitor": {
+      "duration_seconds": 300.035,
+      "samples": 60,
+      "peak_interval_cpu_percent": 13.4,
+      "PASS": true
+    },
+    "counter_deltas": {
+      "completed_final_statuses": 2029,
+      "acknowledged_statuses": 1905,
+      "no_ack_when_expected": 38,
+      "suppressed": 0,
+      "zero_transmission_attempts": 0,
+      "delivered_rx_fcs_errors": 0,
+      "delivered_rx_plcp_errors": 0,
+      "rx_decrypt_errors": 0,
+      "phy_tx_error_irqs": 0,
+      "mac_tx_error_irqs": 0,
+      "rx_ring_underruns": 0,
+      "unexpected_classifier_bounds": 0
+    },
+    "limits": [
+      "Counters include all N-PHY activity, not an exact test-flow accounting.",
+      "Individual atomic counters are read sequentially, not as one coherent snapshot.",
+      "Hardware may discard corrupted frames before the host counter boundary.",
+      "No causal packet-level on-air correlation established.",
+      "Mac target-filtered monitor attempts produced no beacon positive control, so yielded no usable RF evidence."
+    ],
+    "promoted": false
+  },
+  "final_installed_return": {
+    "PASS": true,
+    "b43_sha256": "4130be2b5f191189d6534c4d77a2b1f637b3bd1ec185f1a593e8e249d8436006",
+    "21_protected_module_config_hashes_match": true,
+    "gateway_3_of_3": true,
+    "mac_wpa2_association_dhcp_two_way_sha_and_wifi_bound_https": true,
+    "experimental_modules_permanently_installed": false
+  }
+}

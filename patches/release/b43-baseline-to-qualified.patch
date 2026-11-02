@@ -1942,7 +1942,20 @@
  	b43_mac_suspend(dev);
  	b43_leds_exit(dev);
  	b43dbg(wl, "Wireless interface stopped\n");
-@@ -6725,6 +6867,42 @@
+@@ -5985,10 +6127,11 @@
+ 		"Found Radio: Manuf 0x%X, ID 0x%X, Revision %u, Version %u\n",
+ 		radio_manuf, radio_id, radio_rev, radio_ver);
+ 
+-	/* FIXME: b43 treats "id" as "ver" and ignores the real "ver" */
++	/* Retain the radio version separately from its historical ID field. */
+ 	phy->radio_manuf = radio_manuf;
+ 	phy->radio_ver = radio_id;
+ 	phy->radio_rev = radio_rev;
++	phy->radio_version = radio_ver;
+ 
+ 	phy->analog = analog_type;
+ 	phy->type = phy_type;
+@@ -6725,6 +6868,42 @@
   * its own making (frame code 0x25, at 0x076C on 784), from no table a
   * driver fills; mac80211 reorders.
   */
@@ -1985,7 +1998,7 @@
  static int b43_op_ampdu_action(struct ieee80211_hw *hw,
  			       struct ieee80211_vif *vif,
  			       struct ieee80211_ampdu_params *params)
-@@ -6733,6 +6911,8 @@
+@@ -6733,6 +6912,8 @@
  	struct b43_sta *bsta = (struct b43_sta *)params->sta->drv_priv;
  	struct b43_wldev *dev;
  	bool ok;
@@ -1994,7 +2007,7 @@
  
  	switch (params->action) {
  	case IEEE80211_AMPDU_TX_START:
-@@ -7223,6 +7403,7 @@
+@@ -7223,6 +7404,7 @@
  	 * See comment in b43_remove(). */
  
  	wldev = b43_bus_get_wldev(dev);
@@ -2002,7 +2015,7 @@
  	b43_debugfs_remove_device(wldev);
  	b43_wireless_core_detach(wldev);
  	list_del(&wldev->list);
-@@ -7257,6 +7438,8 @@
+@@ -7257,6 +7439,8 @@
  
  	b43_bus_set_wldev(dev, wldev);
  	b43_debugfs_add_device(wldev);
@@ -2011,7 +2024,7 @@
  
        out:
  	return err;
-@@ -7355,6 +7538,19 @@
+@@ -7355,6 +7539,19 @@
  	INIT_WORK(&wl->beacon_update_trigger, b43_beacon_update_trigger_work);
  	INIT_WORK(&wl->txpower_adjust_work, b43_phy_txpower_adjust_work);
  	INIT_WORK(&wl->tx_work, b43_tx_work);
@@ -2501,3 +2514,430 @@
 + return result | (own_match ? B43_RXD_OWN_DATA : B43_RXD_OTHER_DATA);
 +}
 +#endif
+--- a/phy_common.h
++++ b/phy_common.h
+@@ -273,6 +273,7 @@
+ 	u16 radio_manuf;	/* Radio manufacturer */
+ 	u16 radio_ver;		/* Radio version */
+ 	u8 radio_rev;		/* Radio revision */
++	u8 radio_version;	/* Version nibble, distinct from radio ID */
+ 
+ 	/* Software state of the radio */
+ 	bool radio_on;
+--- a/phy_n.c
++++ b/phy_n.c
+@@ -1014,8 +1014,16 @@
+ {
+ 	b43_radio_set(dev, R2057_XTALPUOVR_PINCTRL, 0x1);
+ 
+-	if (0) /* FIXME: Is this BCM43217 specific? */
++	/* Vendor907.111 enables this crystal pin override unless
++	 * XTALBUFOUTEN requests the external-buffer path (chip6362 differs).
++	 * Use the exact Archer radio revision/version until other boards qualify.
++	 */
++	if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++	    dev->phy.rev == 17 && dev->phy.radio_ver == 0x2057 &&
++	    dev->phy.radio_rev == 14 && dev->phy.radio_version == 1 &&
++	    !(dev->dev->bus_sprom->boardflags2_hi & B43_BFH2_XTALBUFOUTEN)) {
+ 		b43_radio_set(dev, R2057_XTALPUOVR_PINCTRL, 0x2);
++	}
+ 
+ 	b43_radio_set(dev, R2057_RFPLL_MISC_CAL_RESETN, 0x78);
+ 	b43_radio_set(dev, R2057_XTAL_CONFIG2, 0x80);
+@@ -2712,6 +2720,12 @@
+ 	u16 scap_val;
+ 	s16 scap_val_11b[2], scap_val_11n_20[2], scap_val_11n_40[2];
+ 	bool rccal_ovrd = false;
++	bool archer_epa17 =
++		dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++		phy->rev == 17 && phy->radio_ver == 0x2057 &&
++		phy->radio_rev == 14 && sprom->fem.ghz2.extpa_gain == 3 &&
++		b43_current_band(dev->wl) == NL80211_BAND_2GHZ;
++
+ 
+ 	u16 bias, conv, filt;
+ 
+@@ -2897,6 +2911,26 @@
+ 			}
+ 
+ 			rccal_ovrd = true;
++		} else if (archer_epa17) {
++			/* Vendor907.111 wlc_phy_workarounds_nphy+0x1608:
++			 * EPA radio5 or rev>6 uses measured RC values plus8,
++			 * clamped below, for OFDM filter lookup entries.
++			 * This fills the missing rev14 path, not a power target.
++			 */
++			/* EPA17_FILTER_BEGIN */
++			for (core = 0; core < 2; core++) {
++				lpf_11b[core] = 1;
++				lpf_ofdm_20mhz[core] = 1;
++				lpf_ofdm_40mhz[core] = 3;
++				bcap_val_11b[core] = bcap_val;
++				scap_val_11b[core] = scap_val;
++				bcap_val_11n_20[core] = bcap_val + 8;
++				scap_val_11n_20[core] = scap_val + 8;
++				bcap_val_11n_40[core] = bcap_val + 8;
++				scap_val_11n_40[core] = scap_val + 8;
++			}
++			rccal_ovrd = true;
++			/* EPA17_FILTER_END */
+ 		}
+ 	}
+ 	if (rccal_ovrd) {
+@@ -2942,6 +2976,12 @@
+ 				       rx2tx_lut_40_11n[core]);
+ 			b43_ntab_write(dev, B43_NTAB16(7, 0x159 + core * 16),
+ 				       rx2tx_lut_40_11n[core]);
++			/* Rev>=16 at20MHz: the CCK selector uses slot0x158.
++			 * Vendor+0x183c preserves CCK's calibrated RC values. */
++			if (archer_epa17 && !b43_is_40mhz(dev))
++				b43_ntab_write(dev, B43_NTAB16(7, 0x158 + core * 16),
++					       rx2tx_lut_20_11b[core]);
++
+ 		}
+ 	}
+ 
+@@ -3056,7 +3096,20 @@
+ 			}
+ 		}
+ 	} else {
+-		if (phy->radio_rev != 5) {
++		/* BCM43217 rev14/v1 EPA uses the channel table's mixer tuning.
++		 * Vendor 907.111 wlc_phy_workarounds_nphy 0x1177dc..0x117890
++		 * applies the 0x70 bleed workaround only to older radio revs;
++		 * rev14 skips both this and the old 0x61 mixer override.
++		 * Preserve existing handling for every other board.
++		 */
++		bool keep_channel_tune =
++			dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++			phy->rev == 17 && phy->radio_ver == 0x2057 &&
++			phy->radio_rev == 14 && phy->radio_version == 1 &&
++			sprom->fem.ghz2.extpa_gain == 3 &&
++			b43_current_band(dev->wl) == NL80211_BAND_2GHZ;
++
++		if (phy->radio_rev != 5 && !keep_channel_tune) {
+ 			for (core = 0; core < 2; core++) {
+ 				if (core == 0) {
+ 					b43_radio_write(dev, 0x5c, 0x61);
+@@ -3121,6 +3174,31 @@
+ 	b43_ntab_write_bulk(dev, B43_NTAB32(16, 0x7E), 2, noise_tbl);
+ 
+ 	b43_nphy_gain_ctl_workarounds(dev);
++
++	/* AUXADC17_BEGIN */
++	if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++	    phy->rev == 17 && phy->radio_ver == 0x2057 &&
++	    phy->radio_rev == 14 && phy->radio_version == 1 &&
++	    !b43_nphy_ipa(dev) && sprom->fem.ghz2.extpa_gain == 3 &&
++	    sprom->fem.ghz2.pdet_range == 3 &&
++	    b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
++		/* Vendor907.111 wlc_phy_workarounds_nphy:
++		 * default ADC arrays .rodata+0x3baa0/3baa8/3bac0/3bac8;
++		 * detector range3, 2GHz (0x11831c..0x11834c) uses
++		 * VMID0/1[3]=0x89 and gain0/1[3]=0.
++		 * Detector setup only: preserve factory power coefficients,
++		 * hardware power control, target limits and all other boards.
++		 */
++		static const u16 vmid0[] = { 0x8e, 0x96, 0x96, 0x89 };
++		static const u16 vmid1[] = { 0x8f, 0x9f, 0x9f, 0x89 };
++		static const u16 gain[] = { 2, 2, 2, 0 };
++
++		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x08), 4, vmid0);
++		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x18), 4, vmid1);
++		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x0c), 4, gain);
++		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x1c), 4, gain);
++	}
++	/* AUXADC17_END */
+ 
+ 	/* TODO
+ 	b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x08), 4,
+@@ -3938,6 +4016,20 @@
+ 
+ 	if (b43_nphy_ipa(dev))
+ 		b43_nphy_ipa_internal_tssi_setup(dev);
++	else if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++		 phy->rev == 17 && phy->radio_ver == 0x2057 &&
++		 phy->radio_rev == 14 &&
++		 dev->dev->bus_sprom->fem.ghz2.extpa_gain == 3 &&
++		 b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
++		/* EPA sensor path before the existing idle-TSSI calibration.
++		 * Archer vendor wlc_phy_txpwrctrl_idle_tssi_nphy (907.111):
++		 * radio 2057, external PA, rev >= 7 -> both SSI muxes 0x11,
++		 * then radio 0xcd = 1. No power target or factory data changes.
++		 */
++		b43_radio_write(dev, 0x179, 0x11);
++		b43_radio_write(dev, 0x199, 0x11);
++		b43_radio_write(dev, 0x0cd, 0x01);
++	}
+ 
+ 	if (phy->rev >= 19)
+ 		b43_nphy_rf_ctl_override_rev19(dev, 0x1000, 0, 3, false, 0);
+@@ -5986,9 +6078,18 @@
+ 	u16 clip[2];
+ 	bool do_cal = false;
+ 
+-	if ((dev->phy.rev >= 3) &&
+-	   (sprom->boardflags_lo & B43_BFL_EXTLNA) &&
+-	   (b43_current_band(dev->wl) == NL80211_BAND_2GHZ)) {
++	/* ELNA_PINMUX_BEGIN
++	 * This ChipCommon mux is the BCM4717/4718 package workaround,
++	 * not a generic external-LNA enable. brcmsmac wlc_phy_init_nphy
++	 * and vendor907.111 0x11c420..0x11c474 restrict it to packages
++	 * 9/10 and PHY >=5. BCM43217 package8 must retain its reset mux.
++	 * No forced PA/GPIO state, transmit gain or power-limit change.
++	 */
++	if ((dev->phy.rev >= 5) &&
++	    (dev->dev->chip_pkg == BCMA_PKG_ID_BCM4717 ||
++	     dev->dev->chip_pkg == BCMA_PKG_ID_BCM4718) &&
++	    (sprom->boardflags_lo & B43_BFL_EXTLNA) &&
++	    (b43_current_band(dev->wl) == NL80211_BAND_2GHZ)) {
+ 		switch (dev->dev->bus_type) {
+ #ifdef CPTCFG_B43_BCMA
+ 		case B43_BUS_BCMA:
+@@ -6004,12 +6105,49 @@
+ #endif
+ 		}
+ 	}
++
++	/* ELNA_PINMUX_END */
++	/* EPA17_PIN_ROUTE_BEGIN
++	 * BCM43217's two external-PA control outputs require the dedicated
++	 * PMU ChipControl1 mux bits, not the old package9/10 ChipCommon mux.
++	 * Vendor907.111 wlc_phy_init_nphy 0x11c5a0..0x11c5d0 enables
++	 * CCTRL43217_EXTPA_C0/C1 unless boardflags2 bit20 excludes them.
++	 * sbchipc.h identifies core0 bit13 and core1 bit8. Use the factory
++	 * EPA board selector and preserve every unrelated register bit.
++	 * This routes normal PHY PA controls; no forced TX enable, gain,
++	 * calibration, transmit target or regulatory power-limit change.
++	 */
++	if (dev->dev->bus_type == B43_BUS_BCMA &&
++	    dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++	    phy->rev == 17 && phy->radio_ver == 0x2057 &&
++	    phy->radio_rev == 14 && phy->radio_version == 1 &&
++	    !b43_nphy_ipa(dev) && sprom->fem.ghz2.extpa_gain == 3 &&
++	    !(sprom->boardflags2_hi & 0x0010) &&
++	    b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
++#ifdef CPTCFG_B43_BCMA
++		struct bcma_drv_cc *cc = &dev->dev->bdev->bus->drv_cc;
++
++		bcma_chipco_chipctl_maskset(cc, 1, ~0x00002100U, 0x00002100U);
++#endif
++	}
++	/* EPA17_PIN_ROUTE_END */
+ 	nphy->use_int_tx_iq_lo_cal = b43_nphy_ipa(dev) ||
+ 		phy->rev >= 7 ||
+ 		(phy->rev >= 5 &&
+ 		 sprom->boardflags2_hi & B43_BFH2_INTERNDET_TXIQCAL);
+ 	nphy->deaf_count = 0;
+ 	b43_nphy_tables_init(dev);
++	/* BCM43217 EPA boards with SINGLEANT_CCK require ucode to select
++	 * core 0 for CCK, as brcmsmac and this board's vendor driver do.
++	 * HOSTF4 is outside the three-word b43_hf_read/write interface.
++	 */
++	if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++	    phy->rev == 17 && phy->radio_rev == 14 &&
++	    (sprom->boardflags2_lo & B43_BFL2_SINGLEANT_CCK)) {
++		u16 hf4 = b43_shm_read16(dev, B43_SHM_SHARED, B43_SHM_SH_HOSTF4);
++		b43_shm_write16(dev, B43_SHM_SHARED, B43_SHM_SH_HOSTF4,
++				hf4 | 0x0080);
++	}
+ 	nphy->crsminpwr_adjusted = false;
+ 	nphy->noisevars_adjusted = false;
+ 
+@@ -6488,6 +6626,7 @@
+ 	phy->n = NULL;
+ }
+ 
++
+ static int b43_nphy_op_init(struct b43_wldev *dev)
+ {
+ 	return b43_phy_initn(dev);
+--- a/radio_2057.c
++++ b/radio_2057.c
+@@ -112,6 +112,25 @@
+ 	{ 0x1cc, 0x01 }, { 0x1cf, 0x10 }, { 0x1d0, 0x0f }, { 0x1d3, 0x10 },
+ 	{ 0x1d4, 0x0f },
+ };
++
++/* TP-Link Archer C5 v2 vendor907.111: radio2057 rev14, version1.
++ * Enabled register facts from regs table .data+0x3c8b8, selected by
++ * wlc_phy_switch_radio_nphy+0xe04; version0 table is retained above.
++ */
++static const u16 r2057_rev14v1_init[][2] = {
++	{ 0x082, 0x08 },
++	{ 0x0c4, 0x10 },
++	{ 0x0c9, 0x01 },
++	{ 0x107, 0x08 },
++	{ 0x149, 0x10 },
++	{ 0x14e, 0x01 },
++	{ 0x1af, 0x40 },
++	{ 0x1b0, 0x40 },
++	{ 0x1b7, 0x05 },
++	{ 0x1c2, 0xa0 },
++	{ 0x1cc, 0x6c },
++};
++
+ 
+ #define RADIOREGS7(r00, r01, r02, r03, r04, r05, r06, r07, r08, r09, \
+ 		   r10, r11, r12, r13, r14, r15, r16, r17, r18, r19, \
+@@ -357,6 +376,49 @@
+ 	},
+ };
+ 
++/* BCM43217 radio2057 revision14 version1 channel register facts.
++ * Vendor 907.111 chan_info_nphyrev17_2057_rev14v1 (.data+0x10bd4);
++ * wlc_phy_chan2freq_nphy 0x84108..0x8412c selects it for version1.
++ * Retain the existing channel1-11 coverage and the version0 fallback.
++ */
++static const struct b43_nphy_chantabent_rev7_2g b43_nphy_chantab_phy_rev17_radio_rev14v1[] = {
++	{ .freq = 2412,
++	  RADIOREGS7_2G(0x48, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x6c, 0x09, 0x0d, 0x09, 0x0a, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03c9, 0x03c5, 0x03c1, 0x043a, 0x043f, 0x0443), },
++	{ .freq = 2417,
++	  RADIOREGS7_2G(0x4b, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x71, 0x09, 0x0d, 0x08, 0x0a, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03cb, 0x03c7, 0x03c3, 0x0438, 0x043d, 0x0441), },
++	{ .freq = 2422,
++	  RADIOREGS7_2G(0x4e, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x76, 0x09, 0x0d, 0x08, 0x0a, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03cd, 0x03c9, 0x03c5, 0x0436, 0x043a, 0x043f), },
++	{ .freq = 2427,
++	  RADIOREGS7_2G(0x52, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x7b, 0x09, 0x0c, 0x08, 0x0a, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03cf, 0x03cb, 0x03c7, 0x0434, 0x0438, 0x043d), },
++	{ .freq = 2432,
++	  RADIOREGS7_2G(0x55, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x80, 0x09, 0x0c, 0x08, 0x09, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03d1, 0x03cd, 0x03c9, 0x0431, 0x0436, 0x043a), },
++	{ .freq = 2437,
++	  RADIOREGS7_2G(0x58, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x85, 0x09, 0x0c, 0x08, 0x09, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03d3, 0x03cf, 0x03cb, 0x042f, 0x0434, 0x0438), },
++	{ .freq = 2442,
++	  RADIOREGS7_2G(0x5c, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x8a, 0x09, 0x0c, 0x08, 0x09, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03d5, 0x03d1, 0x03cd, 0x042d, 0x0431, 0x0436), },
++	{ .freq = 2447,
++	  RADIOREGS7_2G(0x5f, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x8f, 0x09, 0x0c, 0x08, 0x08, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03d7, 0x03d3, 0x03cf, 0x042b, 0x042f, 0x0434), },
++	{ .freq = 2452,
++	  RADIOREGS7_2G(0x62, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x94, 0x09, 0x0c, 0x08, 0x08, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03d9, 0x03d5, 0x03d1, 0x0429, 0x042d, 0x0431), },
++	{ .freq = 2457,
++	  RADIOREGS7_2G(0x66, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x99, 0x09, 0x0b, 0x07, 0x08, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03db, 0x03d7, 0x03d3, 0x0427, 0x042b, 0x042f), },
++	{ .freq = 2462,
++	  RADIOREGS7_2G(0x69, 0x16, 0x30, 0x2b, 0x1f, 0x1f, 0x30, 0x9e, 0x09, 0x0b, 0x07, 0x08, 0x21, 0x03, 0xff, 0x21, 0x03, 0xff),
++	  PHYREGS(0x03dd, 0x03d9, 0x03d5, 0x0424, 0x0429, 0x042d), },
++};
++
++
++
+ /* Extracted from MMIO dump of 6.30.223.141 */
+ static const struct b43_nphy_chantabent_rev7 b43_nphy_chantab_phy_rev16_radio_rev9[] = {
+ 	{
+@@ -524,7 +586,7 @@
+ void r2057_upload_inittabs(struct b43_wldev *dev)
+ {
+ 	struct b43_phy *phy = &dev->phy;
+-	u16 *table = NULL;
++	const u16 *table = NULL;
+ 	u16 size, i;
+ 
+ 	switch (phy->rev) {
+@@ -555,8 +617,16 @@
+ 		break;
+ 	case 17:
+ 		if (phy->radio_rev == 14) {
+-			table = r2057_rev14_init[0];
+-			size = ARRAY_SIZE(r2057_rev14_init);
++			if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++			    phy->radio_ver == 0x2057 && phy->radio_version == 1) {
++				/* RADIO14V1_SELECT_BEGIN */
++				table = r2057_rev14v1_init[0];
++				size = ARRAY_SIZE(r2057_rev14v1_init);
++				/* RADIO14V1_SELECT_END */
++			} else {
++				table = r2057_rev14_init[0];
++				size = ARRAY_SIZE(r2057_rev14_init);
++			}
+ 		}
+ 		break;
+ 	}
+@@ -596,8 +666,14 @@
+ 		break;
+ 	case 17:
+ 		if (phy->radio_rev == 14) {
+-			e_r7_2g = b43_nphy_chantab_phy_rev17_radio_rev14;
+-			len = ARRAY_SIZE(b43_nphy_chantab_phy_rev17_radio_rev14);
++			if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++			    phy->radio_ver == 0x2057 && phy->radio_version == 1) {
++				e_r7_2g = b43_nphy_chantab_phy_rev17_radio_rev14v1;
++				len = ARRAY_SIZE(b43_nphy_chantab_phy_rev17_radio_rev14v1);
++			} else {
++				e_r7_2g = b43_nphy_chantab_phy_rev17_radio_rev14;
++				len = ARRAY_SIZE(b43_nphy_chantab_phy_rev17_radio_rev14);
++			}
+ 		}
+ 		break;
+ 	default:
+--- a/tables_nphy.c
++++ b/tables_nphy.c
+@@ -2360,6 +2360,48 @@
+ 
+ /* EPA 2 GHz */
+ 
++/* BCM43217 N-PHY rev17 / radio2057 rev14 external-PA table.
++ * Hardware values and selection corroborated against the Archer C5 v2
++ * vendor object nphy_tpc_txgain_epa_2057rev7_2gv17 (128 u32 entries).
++ * Preserve factory calibration and restrict this addition to the matched FEM.
++ */
++static const u32 b43_ntab_tx_gain_epa_rev17_2g[] = {
++	0x10520033, 0x10520031, 0x1052002f, 0x104a0031,
++	0x104a002e, 0x104a002b, 0x104a0029, 0x1042002c,
++	0x1042002a, 0x10420027, 0x10420025, 0x10420023,
++	0x10420021, 0x1042001f, 0x10320029, 0x10320026,
++	0x10320024, 0x10320022, 0x10320020, 0x102a0025,
++	0x102a0023, 0x102a0021, 0x102a001f, 0x10220025,
++	0x10220023, 0x10220021, 0x1022001f, 0x1022011f,
++	0x1022021f, 0x1022031f, 0x101a0022, 0x101a0020,
++	0x101a0120, 0x101a0220, 0x101a0320, 0x101a0420,
++	0x101a0520, 0x101a0620, 0x101a0720, 0x1012001f,
++	0x1012001e, 0x1012001c, 0x1012001a, 0x10120019,
++	0x10120119, 0x10120219, 0x10120319, 0x10120419,
++	0x10120519, 0x10120619, 0x100a0024, 0x100a0022,
++	0x100a0020, 0x100a001f, 0x100a001d, 0x100a001b,
++	0x100a001a, 0x100a011a, 0x100a021a, 0x100a031a,
++	0x100a041a, 0x100a051a, 0x100a061a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++	0x100a071a, 0x100a071a, 0x100a071a, 0x100a071a,
++};
++
++
++
+ static const u32 b43_ntab_tx_gain_epa_rev3_2g[] = {
+ 	0x1f410044, 0x1f410042, 0x1f410040, 0x1f41003e,
+ 	0x1f41003c, 0x1f41003b, 0x1f410039, 0x1f410037,
+@@ -3713,6 +3755,14 @@
+ 		}
+ 	} else {
+ 		switch (phy->rev) {
++		case 17:
++			if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
++			    phy->radio_rev == 14 &&
++			    sprom->fem.ghz2.extpa_gain == 3)
++				return b43_ntab_tx_gain_epa_rev17_2g;
++			b43err(dev->wl,
++			       "No 2GHz EPA gain table available for this device\\n");
++			return NULL;
+ 		case 6:
+ 		case 5:
+ 			if (sprom->fem.ghz2.extpa_gain == 3)

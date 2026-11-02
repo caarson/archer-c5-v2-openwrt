@@ -60,3 +60,16 @@ make -j2 -C backports ARCH=arm CROSS_COMPILE="$CROSS_COMPILE" \
 ```
 
 The recorded builds reused Linux6.12.112 configuration SHA256`04c42b16194e4814d6d2812f226ae4df934ed773b584251450341e2323e241d2` and Module.symvers SHA256`eb13c9705c7e789070e1d13c3bee63d90daa35d2719c52f82610735aa7d32513`. GCC14.3.0/musl ARM Cortex-A9 produced the qualified modules. Those commands describe the prepared build; a clean public full-image rebuild is still a prerequisite for a generic binary release. Do not insert these modules into an arbitrary running router.
+
+## BCM43217 follow-up on main
+
+The current `source/release-b43/` includes the [2.4GHz initialization correction](BCM43217-24GHZ.md). The `v0.1.0-b797` tag and its assets remain historical b797 snapshots. mac80211, the kernel ABI/configuration and runtime module options are unchanged. The matching private lab update uses the exact qualified module on the existing kernel; this does not supply a generic module installer for arbitrary OpenWrt kernels.
+
+Portable selector/write-bound checks:
+
+```sh
+cc -Wall -Wextra -Werror -fsanitize=address,undefined tests/test_bcm43217_epa_route.c -o /tmp/c5-epa-test
+/tmp/c5-epa-test
+cc -Wall -Wextra -Werror -Wno-misleading-indentation -fsanitize=address,undefined tests/test_bcm43217_auxadc.c -o /tmp/c5-adc-test
+/tmp/c5-adc-test
+```

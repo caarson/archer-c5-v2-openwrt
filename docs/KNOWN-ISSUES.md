@@ -8,3 +8,7 @@
 - Wi-Fi retries, failed transmission attempts and miscellaneous RX drops were nonzero; application integrity and sampled reachability passed. Station counters are not exact test-flow packet-loss counts.
 - The source archive is not yet a clean, turnkey full-firmware build or a public generic installer. Private lab firmware is not suitable for distribution.
 - Proprietary Broadcom microcode784.2 remains a radio dependency; the host driver is open source.
+
+- The2.4GHz AP is restored by the BCM43217 EPA initialization correction, with legacyb/g support only. The earlier channel1 qualification was conditional because of isolated ICMP/DNS loss; see [the correction and test limits](BCM43217-24GHZ.md). A short channel11 check cannot establish long-term radio reliability.
+
+- The extended2.4GHz follow-up still shows intermittent packet loss and occasional upload timeouts. Factory base-initialization, RX-gain, TX-chain and software-CCMP experiments did not establish a repeatable fix and are excluded. Functional connection is demonstrated; complete reliability is not.

@@ -6127,10 +6127,11 @@ static int b43_phy_versioning(struct b43_wldev *dev)
 		"Found Radio: Manuf 0x%X, ID 0x%X, Revision %u, Version %u\n",
 		radio_manuf, radio_id, radio_rev, radio_ver);
 
-	/* FIXME: b43 treats "id" as "ver" and ignores the real "ver" */
+	/* Retain the radio version separately from its historical ID field. */
 	phy->radio_manuf = radio_manuf;
 	phy->radio_ver = radio_id;
 	phy->radio_rev = radio_rev;
+	phy->radio_version = radio_ver;
 
 	phy->analog = analog_type;
 	phy->type = phy_type;

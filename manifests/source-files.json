@@ -425,8 +425,8 @@
     "origin": "review-only diff from pinned upstream b43 files to exact installed baseline; not an additional patch to apply after the six-patch series"
   },
   "manifests/upstream-pins.json": {
-    "sha256": "0ebd30e550286871f178e5ab2a5c9e396c3a7e4b4eb6014e71775a64dec27fd0",
-    "bytes": 2716,
+    "sha256": "fc4aa6d5424b11443d2230be7d9f3a283f9062d3caba0e1bde96baae5374d039",
+    "bytes": 3174,
     "origin": "curated public provenance and identities; no device provisioning"
   }
 }

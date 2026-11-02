@@ -273,6 +273,7 @@ struct b43_phy {
 	u16 radio_manuf;	/* Radio manufacturer */
 	u16 radio_ver;		/* Radio version */
 	u8 radio_rev;		/* Radio revision */
+	u8 radio_version;	/* Version nibble, distinct from radio ID */
 
 	/* Software state of the radio */
 	bool radio_on;

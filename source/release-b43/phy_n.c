@@ -1014,8 +1014,16 @@ static void b43_radio_2057_init_post(struct b43_wldev *dev)
 {
 	b43_radio_set(dev, R2057_XTALPUOVR_PINCTRL, 0x1);
 
-	if (0) /* FIXME: Is this BCM43217 specific? */
+	/* Vendor907.111 enables this crystal pin override unless
+	 * XTALBUFOUTEN requests the external-buffer path (chip6362 differs).
+	 * Use the exact Archer radio revision/version until other boards qualify.
+	 */
+	if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+	    dev->phy.rev == 17 && dev->phy.radio_ver == 0x2057 &&
+	    dev->phy.radio_rev == 14 && dev->phy.radio_version == 1 &&
+	    !(dev->dev->bus_sprom->boardflags2_hi & B43_BFH2_XTALBUFOUTEN)) {
 		b43_radio_set(dev, R2057_XTALPUOVR_PINCTRL, 0x2);
+	}
 
 	b43_radio_set(dev, R2057_RFPLL_MISC_CAL_RESETN, 0x78);
 	b43_radio_set(dev, R2057_XTAL_CONFIG2, 0x80);
@@ -2712,6 +2720,12 @@ static void b43_nphy_workarounds_rev7plus(struct b43_wldev *dev)
 	u16 scap_val;
 	s16 scap_val_11b[2], scap_val_11n_20[2], scap_val_11n_40[2];
 	bool rccal_ovrd = false;
+	bool archer_epa17 =
+		dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+		phy->rev == 17 && phy->radio_ver == 0x2057 &&
+		phy->radio_rev == 14 && sprom->fem.ghz2.extpa_gain == 3 &&
+		b43_current_band(dev->wl) == NL80211_BAND_2GHZ;
+
 
 	u16 bias, conv, filt;
 
@@ -2897,6 +2911,26 @@ static void b43_nphy_workarounds_rev7plus(struct b43_wldev *dev)
 			}
 
 			rccal_ovrd = true;
+		} else if (archer_epa17) {
+			/* Vendor907.111 wlc_phy_workarounds_nphy+0x1608:
+			 * EPA radio5 or rev>6 uses measured RC values plus8,
+			 * clamped below, for OFDM filter lookup entries.
+			 * This fills the missing rev14 path, not a power target.
+			 */
+			/* EPA17_FILTER_BEGIN */
+			for (core = 0; core < 2; core++) {
+				lpf_11b[core] = 1;
+				lpf_ofdm_20mhz[core] = 1;
+				lpf_ofdm_40mhz[core] = 3;
+				bcap_val_11b[core] = bcap_val;
+				scap_val_11b[core] = scap_val;
+				bcap_val_11n_20[core] = bcap_val + 8;
+				scap_val_11n_20[core] = scap_val + 8;
+				bcap_val_11n_40[core] = bcap_val + 8;
+				scap_val_11n_40[core] = scap_val + 8;
+			}
+			rccal_ovrd = true;
+			/* EPA17_FILTER_END */
 		}
 	}
 	if (rccal_ovrd) {
@@ -2942,6 +2976,12 @@ static void b43_nphy_workarounds_rev7plus(struct b43_wldev *dev)
 				       rx2tx_lut_40_11n[core]);
 			b43_ntab_write(dev, B43_NTAB16(7, 0x159 + core * 16),
 				       rx2tx_lut_40_11n[core]);
+			/* Rev>=16 at20MHz: the CCK selector uses slot0x158.
+			 * Vendor+0x183c preserves CCK's calibrated RC values. */
+			if (archer_epa17 && !b43_is_40mhz(dev))
+				b43_ntab_write(dev, B43_NTAB16(7, 0x158 + core * 16),
+					       rx2tx_lut_20_11b[core]);
+
 		}
 	}
 
@@ -3056,7 +3096,20 @@ static void b43_nphy_workarounds_rev7plus(struct b43_wldev *dev)
 			}
 		}
 	} else {
-		if (phy->radio_rev != 5) {
+		/* BCM43217 rev14/v1 EPA uses the channel table's mixer tuning.
+		 * Vendor 907.111 wlc_phy_workarounds_nphy 0x1177dc..0x117890
+		 * applies the 0x70 bleed workaround only to older radio revs;
+		 * rev14 skips both this and the old 0x61 mixer override.
+		 * Preserve existing handling for every other board.
+		 */
+		bool keep_channel_tune =
+			dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+			phy->rev == 17 && phy->radio_ver == 0x2057 &&
+			phy->radio_rev == 14 && phy->radio_version == 1 &&
+			sprom->fem.ghz2.extpa_gain == 3 &&
+			b43_current_band(dev->wl) == NL80211_BAND_2GHZ;
+
+		if (phy->radio_rev != 5 && !keep_channel_tune) {
 			for (core = 0; core < 2; core++) {
 				if (core == 0) {
 					b43_radio_write(dev, 0x5c, 0x61);
@@ -3121,6 +3174,31 @@ static void b43_nphy_workarounds_rev7plus(struct b43_wldev *dev)
 	b43_ntab_write_bulk(dev, B43_NTAB32(16, 0x7E), 2, noise_tbl);
 
 	b43_nphy_gain_ctl_workarounds(dev);
+
+	/* AUXADC17_BEGIN */
+	if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+	    phy->rev == 17 && phy->radio_ver == 0x2057 &&
+	    phy->radio_rev == 14 && phy->radio_version == 1 &&
+	    !b43_nphy_ipa(dev) && sprom->fem.ghz2.extpa_gain == 3 &&
+	    sprom->fem.ghz2.pdet_range == 3 &&
+	    b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
+		/* Vendor907.111 wlc_phy_workarounds_nphy:
+		 * default ADC arrays .rodata+0x3baa0/3baa8/3bac0/3bac8;
+		 * detector range3, 2GHz (0x11831c..0x11834c) uses
+		 * VMID0/1[3]=0x89 and gain0/1[3]=0.
+		 * Detector setup only: preserve factory power coefficients,
+		 * hardware power control, target limits and all other boards.
+		 */
+		static const u16 vmid0[] = { 0x8e, 0x96, 0x96, 0x89 };
+		static const u16 vmid1[] = { 0x8f, 0x9f, 0x9f, 0x89 };
+		static const u16 gain[] = { 2, 2, 2, 0 };
+
+		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x08), 4, vmid0);
+		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x18), 4, vmid1);
+		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x0c), 4, gain);
+		b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x1c), 4, gain);
+	}
+	/* AUXADC17_END */
 
 	/* TODO
 	b43_ntab_write_bulk(dev, B43_NTAB16(8, 0x08), 4,
@@ -3938,6 +4016,20 @@ static void b43_nphy_tx_power_ctl_idle_tssi(struct b43_wldev *dev)
 
 	if (b43_nphy_ipa(dev))
 		b43_nphy_ipa_internal_tssi_setup(dev);
+	else if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+		 phy->rev == 17 && phy->radio_ver == 0x2057 &&
+		 phy->radio_rev == 14 &&
+		 dev->dev->bus_sprom->fem.ghz2.extpa_gain == 3 &&
+		 b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
+		/* EPA sensor path before the existing idle-TSSI calibration.
+		 * Archer vendor wlc_phy_txpwrctrl_idle_tssi_nphy (907.111):
+		 * radio 2057, external PA, rev >= 7 -> both SSI muxes 0x11,
+		 * then radio 0xcd = 1. No power target or factory data changes.
+		 */
+		b43_radio_write(dev, 0x179, 0x11);
+		b43_radio_write(dev, 0x199, 0x11);
+		b43_radio_write(dev, 0x0cd, 0x01);
+	}
 
 	if (phy->rev >= 19)
 		b43_nphy_rf_ctl_override_rev19(dev, 0x1000, 0, 3, false, 0);
@@ -5986,9 +6078,18 @@ static int b43_phy_initn(struct b43_wldev *dev)
 	u16 clip[2];
 	bool do_cal = false;
 
-	if ((dev->phy.rev >= 3) &&
-	   (sprom->boardflags_lo & B43_BFL_EXTLNA) &&
-	   (b43_current_band(dev->wl) == NL80211_BAND_2GHZ)) {
+	/* ELNA_PINMUX_BEGIN
+	 * This ChipCommon mux is the BCM4717/4718 package workaround,
+	 * not a generic external-LNA enable. brcmsmac wlc_phy_init_nphy
+	 * and vendor907.111 0x11c420..0x11c474 restrict it to packages
+	 * 9/10 and PHY >=5. BCM43217 package8 must retain its reset mux.
+	 * No forced PA/GPIO state, transmit gain or power-limit change.
+	 */
+	if ((dev->phy.rev >= 5) &&
+	    (dev->dev->chip_pkg == BCMA_PKG_ID_BCM4717 ||
+	     dev->dev->chip_pkg == BCMA_PKG_ID_BCM4718) &&
+	    (sprom->boardflags_lo & B43_BFL_EXTLNA) &&
+	    (b43_current_band(dev->wl) == NL80211_BAND_2GHZ)) {
 		switch (dev->dev->bus_type) {
 #ifdef CPTCFG_B43_BCMA
 		case B43_BUS_BCMA:
@@ -6004,12 +6105,49 @@ static int b43_phy_initn(struct b43_wldev *dev)
 #endif
 		}
 	}
+
+	/* ELNA_PINMUX_END */
+	/* EPA17_PIN_ROUTE_BEGIN
+	 * BCM43217's two external-PA control outputs require the dedicated
+	 * PMU ChipControl1 mux bits, not the old package9/10 ChipCommon mux.
+	 * Vendor907.111 wlc_phy_init_nphy 0x11c5a0..0x11c5d0 enables
+	 * CCTRL43217_EXTPA_C0/C1 unless boardflags2 bit20 excludes them.
+	 * sbchipc.h identifies core0 bit13 and core1 bit8. Use the factory
+	 * EPA board selector and preserve every unrelated register bit.
+	 * This routes normal PHY PA controls; no forced TX enable, gain,
+	 * calibration, transmit target or regulatory power-limit change.
+	 */
+	if (dev->dev->bus_type == B43_BUS_BCMA &&
+	    dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+	    phy->rev == 17 && phy->radio_ver == 0x2057 &&
+	    phy->radio_rev == 14 && phy->radio_version == 1 &&
+	    !b43_nphy_ipa(dev) && sprom->fem.ghz2.extpa_gain == 3 &&
+	    !(sprom->boardflags2_hi & 0x0010) &&
+	    b43_current_band(dev->wl) == NL80211_BAND_2GHZ) {
+#ifdef CPTCFG_B43_BCMA
+		struct bcma_drv_cc *cc = &dev->dev->bdev->bus->drv_cc;
+
+		bcma_chipco_chipctl_maskset(cc, 1, ~0x00002100U, 0x00002100U);
+#endif
+	}
+	/* EPA17_PIN_ROUTE_END */
 	nphy->use_int_tx_iq_lo_cal = b43_nphy_ipa(dev) ||
 		phy->rev >= 7 ||
 		(phy->rev >= 5 &&
 		 sprom->boardflags2_hi & B43_BFH2_INTERNDET_TXIQCAL);
 	nphy->deaf_count = 0;
 	b43_nphy_tables_init(dev);
+	/* BCM43217 EPA boards with SINGLEANT_CCK require ucode to select
+	 * core 0 for CCK, as brcmsmac and this board's vendor driver do.
+	 * HOSTF4 is outside the three-word b43_hf_read/write interface.
+	 */
+	if (dev->dev->chip_id == BCMA_CHIP_ID_BCM43217 &&
+	    phy->rev == 17 && phy->radio_rev == 14 &&
+	    (sprom->boardflags2_lo & B43_BFL2_SINGLEANT_CCK)) {
+		u16 hf4 = b43_shm_read16(dev, B43_SHM_SHARED, B43_SHM_SH_HOSTF4);
+		b43_shm_write16(dev, B43_SHM_SHARED, B43_SHM_SH_HOSTF4,
+				hf4 | 0x0080);
+	}
 	nphy->crsminpwr_adjusted = false;
 	nphy->noisevars_adjusted = false;
 
@@ -6487,6 +6625,7 @@ static void b43_nphy_op_free(struct b43_wldev *dev)
 	kfree(nphy);
 	phy->n = NULL;
 }
+
 
 static int b43_nphy_op_init(struct b43_wldev *dev)
 {
