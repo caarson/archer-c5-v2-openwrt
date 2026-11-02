@@ -1,0 +1,278 @@
+--- a/net/mac80211/rx.c
++++ b/net/mac80211/rx.c
+@@ -96,6 +96,7 @@
+ module_param_cb(phase3_rx_drop_snapshot, &phase3_rx_drop_ops, NULL, 0400);
+ 
+ #include "phase3_reorder_diag.h"
++#include "phase3_reorder_trigger.h"
+ 
+ /* Bounded RAM-trial flow observer at the MAC-to-IP-stack boundary.
+  * eth_type_trans() has removed Ethernet in every caller of this hook.
+@@ -1492,6 +1493,10 @@
+ 	if (!ieee80211_sn_less(mpdu_seq_num, head_seq_num + buf_size)) {
+ 		head_seq_num = ieee80211_sn_inc(
+ 				ieee80211_sn_sub(mpdu_seq_num, buf_size));
++		if (unlikely(((head_seq_num - phase3_before) & 4095) > 128))
++			phase3_reorder_trigger_capture(sdata, tid_agg_rx, skb,
++						      mpdu_seq_num, phase3_before,
++						      head_seq_num);
+ 		/* release stored frames up to new head to stack */
+ 		ieee80211_release_reorder_frames(sdata, tid_agg_rx,
+ 						 head_seq_num, frames);
+--- a/net/mac80211/wpa.c
++++ b/net/mac80211/wpa.c
+@@ -66,6 +66,8 @@
+ static const unsigned int phase3_pn_limits[3] = { 2, 2, 8 };
+ static DEFINE_SPINLOCK(phase3_pn_lock);
+ 
++#include "phase3_trigger_pn.h"
++
+ static u64 phase3_pn_value(const u8 *pn)
+ {
+ 	return ((u64)pn[0] << 40) | ((u64)pn[1] << 32) |
+@@ -92,6 +94,8 @@
+ 	    header_length < 24 || header_length > 36 ||
+ 	    rx->skb->len < (unsigned int)header_length + 8)
+ 		return;
++	phase3_reorder_pn_observe(rx, pn, previous, iv, header_length,
++				 replay ? 1 : 0);
+ 	if (replay) {
+ 		kind = 2;
+ 	} else {
+@@ -710,8 +714,11 @@
+ 		if (READ_ONCE(phase3_ccmp_iv_guard) &&
+ 		    (status->flag & RX_FLAG_DECRYPTED) &&
+ 		    !phase3_ccmp_iv_canonical(skb->data + hdrlen,
+-					      skb->len - hdrlen))
++					      skb->len - hdrlen)) {
++			phase3_reorder_pn_observe(rx, NULL, NULL,
++						 skb->data + hdrlen, hdrlen, 2);
+ 			return RX_DROP_U_NONCANONICAL_HW_CCMP_IV;
++		}
+ 
+ 		ccmp_hdr2pn(pn, skb->data + hdrlen);
+ 
+--- a/net/mac80211/ieee80211_i.h
++++ b/net/mac80211/ieee80211_i.h
+@@ -2922,4 +2922,8 @@
+ #define VISIBLE_IF_MAC80211_KUNIT static
+ #endif
+ 
++/* Diagnostic-only correlation; no exported module symbol. */
++bool phase3_reorder_trigger_matches(struct ieee80211_sub_if_data *sdata,
++				   unsigned int tid, u16 sc, const u8 *iv);
++
+ #endif /* IEEE80211_I_H */
+--- a/net/mac80211/phase3_reorder_trigger.h
++++ b/net/mac80211/phase3_reorder_trigger.h
+@@ -0,0 +1,111 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Observe the first TID0 MPDU that would shift the BA window by >128.
++ * Called with the existing reorder_lock, before any possible skb free.
++ * Only public 802.11 header fields and a bounded 8-byte IV are copied.
++ * No acceptance, ordering, timer, crypto or delivery decisions are changed.
++ */
++struct phase3_reorder_trigger {
++	u64 flags;
++	u32 at, length;
++	u16 incoming, before, predicted, fc, sc, hdrlen;
++	u8 ra[ETH_ALEN], ta[ETH_ALEN], iv[8];
++	bool valid, iv_present;
++};
++static struct phase3_reorder_trigger phase3_reorder_trigger;
++
++static void phase3_reorder_trigger_capture(struct ieee80211_sub_if_data *sdata,
++					  struct tid_ampdu_rx *agg,
++					  struct sk_buff *skb, u16 incoming,
++					  u16 before, u16 predicted)
++{
++	struct phase3_reorder_trigger t = {};
++	struct ieee80211_hdr *hdr;
++	unsigned long irqflags;
++
++	if (!phase3_reorder_scope(sdata) || agg->tid ||
++	    READ_ONCE(phase3_reorder_trigger.valid) || skb->len < 24)
++		return;
++	hdr = (void *)skb->data;
++	t.flags = IEEE80211_SKB_RXCB(skb)->flag;
++	t.at = (u32)jiffies;
++	t.length = skb->len;
++	t.incoming = incoming;
++	t.before = before;
++	t.predicted = predicted;
++	t.fc = le16_to_cpu(hdr->frame_control);
++	t.sc = le16_to_cpu(hdr->seq_ctrl);
++	t.hdrlen = ieee80211_hdrlen(hdr->frame_control);
++	ether_addr_copy(t.ra, hdr->addr1);
++	ether_addr_copy(t.ta, hdr->addr2);
++	if (ieee80211_has_protected(hdr->frame_control) &&
++	    !(t.flags & RX_FLAG_IV_STRIPPED) &&
++	    t.hdrlen >= 24 && t.hdrlen <= 36 &&
++	    skb->len >= t.hdrlen + sizeof(t.iv) &&
++	    !skb_copy_bits(skb, t.hdrlen, t.iv, sizeof(t.iv)))
++		t.iv_present = true;
++	t.valid = true;
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	if (!phase3_reorder_trigger.valid)
++		phase3_reorder_trigger = t;
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++}
++
++/* Internal MAC-module bridge to the existing, validated PN boundary.
++ * Exact SC/TID/IV match within one second. No skb or key pointer retained.
++ * A match is correlation metadata, not an authentication decision.
++ */
++bool phase3_reorder_trigger_matches(struct ieee80211_sub_if_data *sdata,
++				   unsigned int tid, u16 sc, const u8 *iv)
++{
++	const struct phase3_reorder_trigger *t = &phase3_reorder_trigger;
++	unsigned long irqflags;
++	bool match;
++
++	if (!phase3_reorder_scope(sdata) || tid ||
++	    !READ_ONCE(t->valid))
++		return false;
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	match = t->valid && t->iv_present && t->sc == sc &&
++		(u32)((u32)jiffies - t->at) <= HZ &&
++		!memcmp(t->iv, iv, sizeof(t->iv));
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++	return match;
++}
++
++static void phase3_reorder_trigger_hex(char *out, const u8 *in, unsigned int n)
++{
++	static const char hex[] = "0123456789abcdef";
++	unsigned int i;
++
++	for (i = 0; i < n; i++) {
++		out[2 * i] = hex[in[i] >> 4];
++		out[2 * i + 1] = hex[in[i] & 15];
++	}
++	out[2 * n] = 0;
++}
++
++static int phase3_reorder_trigger_get(char *buffer,
++				     const struct kernel_param *unused)
++{
++	struct phase3_reorder_trigger t;
++	unsigned long irqflags;
++	char ra[13], ta[13], iv[17];
++
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	t = phase3_reorder_trigger;
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++	phase3_reorder_trigger_hex(ra, t.ra, 6);
++	phase3_reorder_trigger_hex(ta, t.ta, 6);
++	phase3_reorder_trigger_hex(iv, t.iv, 8);
++	return scnprintf(buffer, PAGE_SIZE,
++			 "trigger_schema=1 enabled=%u valid=%u tid=0 at=%u incoming=%u before=%u predicted=%u fc=%04x sc=%04x length=%u hdr=%u flags=%016llx ra=%s ta=%s iv_present=%u iv=%s\n",
++			 READ_ONCE(phase3_reorder_diag), t.valid, t.at,
++			 t.incoming, t.before, t.predicted, t.fc, t.sc,
++			 t.length, t.hdrlen, (unsigned long long)t.flags,
++			 ra, ta, t.iv_present, iv);
++}
++static const struct kernel_param_ops phase3_reorder_trigger_ops = {
++	.get = phase3_reorder_trigger_get,
++};
++module_param_cb(phase3_reorder_trigger_snapshot,
++		&phase3_reorder_trigger_ops, NULL, 0400);
+--- a/net/mac80211/phase3_trigger_pn.h
++++ b/net/mac80211/phase3_trigger_pn.h
+@@ -0,0 +1,96 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Correlate one exact reorder trigger at the existing PN decision boundary.
++ * Reason 0: existing PN-accepted path; 1: existing replay rejection;
++ * 2: existing noncanonical-IV guard rejection (PN not decoded).
++ * Key identity is metadata; key material and pointers are never retained.
++ */
++static struct phase3_pn_record phase3_trigger_pn;
++static bool phase3_trigger_pn_valid, phase3_trigger_pn_present;
++static DEFINE_SPINLOCK(phase3_trigger_pn_lock);
++
++static void phase3_reorder_pn_observe(struct ieee80211_rx_data *rx,
++				    const u8 *pn, const u8 *previous,
++				    const u8 *iv, int hdrlen, u8 reason)
++{
++	struct phase3_pn_record t = {};
++	struct ieee80211_hdr *hdr;
++	unsigned long irqflags;
++	int queue = rx->security_idx;
++
++	if (!READ_ONCE(phase3_pn_diag) ||
++	    READ_ONCE(phase3_trigger_pn_valid) || !rx->key ||
++	    !(rx->key->conf.flags & IEEE80211_KEY_FLAG_PAIRWISE) ||
++	    rx->sdata->vif.type != NL80211_IFTYPE_STATION ||
++	    queue < 0 || queue > IEEE80211_NUM_TIDS ||
++	    hdrlen < 24 || hdrlen > 36 || reason > 2 ||
++	    rx->skb->len < (unsigned int)hdrlen + 8)
++		return;
++	hdr = (void *)rx->skb->data;
++	if (!phase3_reorder_trigger_matches(rx->sdata, queue,
++					   le16_to_cpu(hdr->seq_ctrl), iv))
++		return;
++	t.flags = IEEE80211_SKB_RXCB(rx->skb)->flag;
++	t.observed_jiffies = (u32)jiffies;
++	t.key_color = rx->key->color;
++	t.cipher = rx->key->conf.cipher;
++	t.length = rx->skb->len;
++	t.sequence = le16_to_cpu(hdr->seq_ctrl);
++	t.frame_control = le16_to_cpu(hdr->frame_control);
++	t.header_length = hdrlen;
++	t.queue = queue;
++	t.key_index = rx->key->conf.keyidx;
++	t.kind = reason;
++	memcpy(t.iv, iv, sizeof(t.iv));
++	if (pn && previous) {
++		memcpy(t.pn, pn, sizeof(t.pn));
++		memcpy(t.previous, previous, sizeof(t.previous));
++	}
++	spin_lock_irqsave(&phase3_trigger_pn_lock, irqflags);
++	if (!phase3_trigger_pn_valid) {
++		phase3_trigger_pn = t;
++		phase3_trigger_pn_present = pn && previous;
++		phase3_trigger_pn_valid = true;
++	}
++	spin_unlock_irqrestore(&phase3_trigger_pn_lock, irqflags);
++}
++
++static void phase3_trigger_pn_hex(char *out, const u8 *in, unsigned int n)
++{
++	static const char hex[] = "0123456789abcdef";
++	unsigned int i;
++
++	for (i = 0; i < n; i++) {
++		out[2 * i] = hex[in[i] >> 4];
++		out[2 * i + 1] = hex[in[i] & 15];
++	}
++	out[2 * n] = 0;
++}
++
++static int phase3_trigger_pn_get(char *buffer,
++				const struct kernel_param *unused)
++{
++	struct phase3_pn_record t;
++	unsigned long irqflags;
++	bool valid, present;
++	char pn[13], previous[13], iv[17];
++
++	spin_lock_irqsave(&phase3_trigger_pn_lock, irqflags);
++	t = phase3_trigger_pn;
++	valid = phase3_trigger_pn_valid;
++	present = phase3_trigger_pn_present;
++	spin_unlock_irqrestore(&phase3_trigger_pn_lock, irqflags);
++	phase3_trigger_pn_hex(pn, t.pn, 6);
++	phase3_trigger_pn_hex(previous, t.previous, 6);
++	phase3_trigger_pn_hex(iv, t.iv, 8);
++	return scnprintf(buffer, PAGE_SIZE,
++			 "pn_trigger_schema=1 enabled=%u valid=%u reason=%u j=%u key_color=%u cipher=%08x queue=%u key_index=%u flags=%016llx sequence=%04x fc=%04x length=%u hdr=%u pn_present=%u pn=%s previous=%s iv=%s\n",
++			 READ_ONCE(phase3_pn_diag), valid, t.kind,
++			 t.observed_jiffies, t.key_color, t.cipher, t.queue,
++			 t.key_index, (unsigned long long)t.flags,
++			 t.sequence, t.frame_control, t.length, t.header_length,
++			 present, pn, previous, iv);
++}
++static const struct kernel_param_ops phase3_trigger_pn_ops = {
++	.get = phase3_trigger_pn_get,
++};
++module_param_cb(phase3_reorder_pn_snapshot, &phase3_trigger_pn_ops, NULL, 0400);

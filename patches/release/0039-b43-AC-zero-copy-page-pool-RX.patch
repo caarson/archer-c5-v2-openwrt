@@ -1,0 +1,313 @@
+--- a/drivers/net/wireless/broadcom/b43/dma.c
++++ b/drivers/net/wireless/broadcom/b43/dma.c
+@@ -29,6 +29,7 @@
+ #include <linux/skbuff.h>
+ #include <linux/etherdevice.h>
+ #include <linux/slab.h>
++#include <net/page_pool/helpers.h>
+ #include <asm/div64.h>
+ 
+ 
+@@ -387,6 +388,10 @@
+ 		      controller_idx < ARRAY_SIZE(map32)));
+ 	return map32[controller_idx];
+ }
++
++bool b43_rx_pool;
++module_param_named(rx_pool, b43_rx_pool, bool, 0400);
++MODULE_PARM_DESC(rx_pool, "AC RX page-pool buffers (lab only, default off; requires rx_bidir/rx_sync_len)");
+ 
+ bool b43_rx_bidir;
+ module_param_named(rx_bidir, b43_rx_bidir, bool, 0400);
+@@ -640,6 +645,8 @@
+ 	memset(frame, 0xFF, sizeof(struct b43_plcp_hdr6) + 2 /* padding */);
+ }
+ 
++#include "rx_pool_impl.h"
++
+ static int setup_rx_descbuffer(struct b43_dmaring *ring,
+ 			       struct b43_dmadesc_generic *desc,
+ 			       struct b43_dmadesc_meta *meta, gfp_t gfp_flags,
+@@ -651,6 +658,8 @@
+ 	struct b43_dma_cost *cost = &ring->dev->stall_diag.dma_cost;
+ 
+ 	B43_WARN_ON(ring->tx);
++	if (ring->rx_pool)
++		return b43_pool_setup(ring, desc, meta, gfp_flags, sample);
+ 
+ 	if (sample)
+ 		stamp = (u32)ktime_get_mono_fast_ns();
+@@ -733,8 +742,12 @@
+ 	for (i--; i >= 0; i--) {
+ 		desc = ring->ops->idx2desc(ring, i, &meta);
+ 
+-		unmap_descbuffer(ring, meta->dmaaddr, ring->rx_buffersize, 0);
++		if (!ring->rx_pool)
++			unmap_descbuffer(ring, meta->dmaaddr, ring->rx_buffersize, 0);
++		else
++			sync_descbuffer_for_cpu(ring, meta->dmaaddr, ring->rx_buffersize);
+ 		dev_kfree_skb(meta->skb);
++		meta->skb = NULL;
+ 	}
+ 	goto out;
+ }
+@@ -884,8 +897,13 @@
+ 			unmap_descbuffer(ring, meta->dmaaddr,
+ 					 meta->skb->len, 1);
+ 		} else {
+-			unmap_descbuffer(ring, meta->dmaaddr,
++			if (ring->rx_pool) {
++				sync_descbuffer_for_cpu(ring, meta->dmaaddr, ring->rx_buffersize);
++				ring->dev->stall_diag.rx_pool.released++;
++			} else {
++				unmap_descbuffer(ring, meta->dmaaddr,
+ 					 ring->rx_buffersize, 0);
++			}
+ 		}
+ 		free_descriptor_buffer(ring, meta);
+ 	}
+@@ -1034,6 +1052,9 @@
+ 	err = alloc_ringmemory(ring);
+ 	if (err)
+ 		goto err_kfree_txhdr_cache;
++	err = b43_pool_create(ring);
++	if (err)
++		goto err_free_ringmemory;
+ 	err = dmacontroller_setup(ring);
+ 	if (err)
+ 		goto err_free_ringmemory;
+@@ -1042,6 +1063,7 @@
+ 	return ring;
+ 
+       err_free_ringmemory:
++	b43_pool_destroy(ring);
+ 	free_ringmemory(ring);
+       err_kfree_txhdr_cache:
+ 	kfree(ring->txhdr_cache);
+@@ -1104,6 +1126,7 @@
+ 	 */
+ 	dmacontroller_cleanup(ring);
+ 	free_all_descbuffers(ring);
++	b43_pool_destroy(ring);
+ 	free_ringmemory(ring);
+ 
+ 	kfree(ring->txhdr_cache);
+@@ -1836,10 +1859,14 @@
+ 	if (b43_rx_short_sync(ring)) {
+ 		sync_descbuffer_for_cpu(ring, addr, len + ring->frameoffset);
+ 		atomic_inc(&ring->dev->wl->rxsync_payloads);
+-		dma_unmap_single_attrs(ring->dev->dev->dma_dev, addr,
++		if (ring->rx_pool) {
++			ring->dev->stall_diag.rx_pool.received++;
++		} else {
++			dma_unmap_single_attrs(ring->dev->dev->dma_dev, addr,
+ 				       ring->rx_buffersize, ring->rx_dma_dir,
+ 				       DMA_ATTR_SKIP_CPU_SYNC);
+-		atomic_inc(&ring->dev->wl->rxsync_skips);
++			atomic_inc(&ring->dev->wl->rxsync_skips);
++		}
+ 		WRITE_ONCE(ring->dev->wl->rxsync_lastlen, len);
+ 	} else {
+ 		unmap_descbuffer(ring, addr, ring->rx_buffersize, 0);
+--- a/drivers/net/wireless/broadcom/b43/dma.h
++++ b/drivers/net/wireless/broadcom/b43/dma.h
+@@ -204,6 +204,7 @@
+ };
+ 
+ struct b43_dmaring;
++struct page_pool;
+ 
+ /* Lowlevel DMA operations that differ between 32bit and 64bit DMA. */
+ struct b43_dma_ops {
+@@ -262,6 +263,8 @@
+ 	/* Descriptor buffer size. */
+ 	u16 rx_buffersize;
+ 	enum dma_data_direction rx_dma_dir;
++	struct page_pool *rx_pool;
++	unsigned int rx_pool_order, rx_pool_bytes;
+ 	/* The MMIO base register of the DMA controller. */
+ 	u16 mmio_base;
+ 	/* DMA controller index number (0-5). */
+--- /dev/null
++++ b/drivers/net/wireless/broadcom/b43/rx_pool_diag.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_RX_POOL_DIAG_H
++#define B43_RX_POOL_DIAG_H
++#define B43_RX_POOL_MAX_PAGES 1024U
++struct b43_rx_pool_diag {
++ u32 allocated, prepared, received, alloc_fail, build_fail, bad_addr;
++ u32 cap_fail, released;
++};
++extern bool b43_rx_pool;
++#endif
+--- /dev/null
++++ b/drivers/net/wireless/broadcom/b43/rx_pool_impl.h
+@@ -0,0 +1,118 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_RX_POOL_IMPL_H
++#define B43_RX_POOL_IMPL_H
++/* RX allocator is serialized by the existing wl->mutex; initial fill occurs
++ * before IRQ registration. No direct recycling: skb frees may run elsewhere.
++ * Page-pool owns mappings through last skb reference and deferred destruction.
++ * Driver explicitly syncs CPU header before poison, then the FULL advertised
++ * RX region for device before posting. Pool flags deliberately omit SYNC_DEV:
++ * the driver performs this ownership transition after its poison writes.
++ */
++static int b43_pool_create(struct b43_dmaring *ring)
++{
++ struct page_pool_params p = { 0 };
++ struct page_pool *pool;
++ unsigned int size;
++ if (!b43_rx_pool || ring->tx || ring->dev->phy.type != B43_PHYTYPE_AC)
++  return 0;
++ if (ring->type != B43_DMA_64BIT || ring->index != 0 ||
++     ring->rx_dma_dir != DMA_BIDIRECTIONAL || !b43_rx_sync_len)
++  return -EINVAL;
++ size = SKB_DATA_ALIGN(NET_SKB_PAD + ring->rx_buffersize) +
++        SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
++ ring->rx_pool_order = get_order(size);
++ if (ring->rx_pool_order > 1)
++  return -E2BIG;
++ ring->rx_pool_bytes = PAGE_SIZE << ring->rx_pool_order;
++ p.order = ring->rx_pool_order;
++ p.pool_size = ring->nr_slots;
++ p.nid = NUMA_NO_NODE;
++ p.dev = ring->dev->dev->dma_dev;
++ p.dma_dir = DMA_BIDIRECTIONAL;
++ p.offset = NET_SKB_PAD;
++ p.max_len = ring->rx_buffersize;
++ p.flags = PP_FLAG_DMA_MAP;
++ pool = page_pool_create(&p);
++ if (IS_ERR(pool))
++  return PTR_ERR(pool);
++ ring->rx_pool = pool;
++ return 0;
++}
++static int b43_pool_setup(struct b43_dmaring *ring,
++                          struct b43_dmadesc_generic *desc,
++                          struct b43_dmadesc_meta *meta, gfp_t gfp,
++                          bool sample)
++{
++ struct b43_rx_pool_diag *d = &ring->dev->stall_diag.rx_pool;
++ struct b43_dma_cost *cost = &ring->dev->stall_diag.dma_cost;
++ struct page_pool *pool = ring->rx_pool;
++ struct page *page;
++ struct sk_buff *skb;
++ dma_addr_t base, dmaaddr;
++ u32 stamp = 0, mapped;
++ /* Order1 slow allocation creates one page at a time. Fail closed at8MiB
++  * mapped pool storage; no unbounded fallback allocation or silent mode swap.
++  */
++ mapped = pool->pages_state_hold_cnt -
++          (u32)atomic_read(&pool->pages_state_release_cnt);
++ if (mapped >= B43_RX_POOL_MAX_PAGES) {
++  d->cap_fail++;
++  return -ENOMEM;
++ }
++ if (sample)
++  stamp = (u32)ktime_get_mono_fast_ns();
++ page = page_pool_alloc_pages(pool, gfp);
++ if (unlikely(!page)) {
++  d->alloc_fail++;
++  return -ENOMEM;
++ }
++ skb = build_skb(page_address(page), ring->rx_pool_bytes);
++ if (unlikely(!skb)) {
++  d->build_fail++;
++  page_pool_put_full_page(pool, page, false);
++  return -ENOMEM;
++ }
++ skb_mark_for_recycle(skb);
++ skb_reserve(skb, NET_SKB_PAD);
++ if (sample)
++  b43_dma_cost_note(cost, B43_DMA_COST_ALLOC,
++                   stamp, (u32)ktime_get_mono_fast_ns());
++ base = page_pool_get_dma_addr(page);
++ dmaaddr = base + NET_SKB_PAD;
++ /* Do not call the legacy error helper: it would unmap pool-owned pages.
++  * Pool already checked DMA mapping errors. Only AC DMA64 is admitted above.
++  */
++ if (unlikely((u64)dmaaddr < (u64)base ||
++              (u64)dmaaddr + ring->rx_buffersize < (u64)dmaaddr)) {
++  d->bad_addr++;
++  dev_kfree_skb_any(skb);
++  return -EIO;
++ }
++ if (sample)
++  stamp = (u32)ktime_get_mono_fast_ns();
++ sync_descbuffer_for_cpu(ring, dmaaddr,
++                         ring->frameoffset + sizeof(struct b43_plcp_hdr6) + 2);
++ b43_poison_rx_buffer(ring, skb);
++ sync_descbuffer_for_device(ring, dmaaddr, ring->rx_buffersize);
++ if (sample)
++  b43_dma_cost_note(cost, B43_DMA_COST_MAP,
++                   stamp, (u32)ktime_get_mono_fast_ns());
++ /* MAP timing now means pool prepare CPU/device sync, not a new map API.
++  * Publish meta only after every fallible operation and ownership sync.
++  */
++ meta->skb = skb;
++ meta->dmaaddr = dmaaddr;
++ ring->ops->fill_descriptor(ring, desc, dmaaddr,
++                            ring->rx_buffersize, 0, 0, 0);
++ d->allocated++;
++ d->prepared++;
++ return 0;
++}
++static void b43_pool_destroy(struct b43_dmaring *ring)
++{
++ if (ring->rx_pool) {
++  page_pool_destroy(ring->rx_pool);
++  ring->rx_pool = NULL;
++ }
++}
++#endif
+--- a/drivers/net/wireless/broadcom/b43/stall_diag.h
++++ b/drivers/net/wireless/broadcom/b43/stall_diag.h
+@@ -6,6 +6,7 @@
+ #include <linux/types.h>
+ #include "service_diag.h"
+ #include "dma_cost.h"
++#include "rx_pool_diag.h"
+ 
+ enum b43_stall_counter {
+ 	B43_SD_TX_POST,
+@@ -69,6 +70,7 @@
+ 	struct b43_rx_flow_diag rx_flow;
+ 	struct b43_service_diag service;
+ 	struct b43_dma_cost dma_cost;
++	struct b43_rx_pool_diag rx_pool;
+ 	atomic_t count[B43_SD_COUNT]; /* modulo 2^32, never reset by a read */
+ 	atomic_t ba_win[16]; /* last TX BA callback per TID, not every peer */
+ 	u32 ampdu_hist[5]; /* 0/1, 2-7, 8-15, 16-31, >=32 MPDUs/status */
+--- a/drivers/net/wireless/broadcom/b43/sysfs.c
++++ b/drivers/net/wireless/broadcom/b43/sysfs.c
+@@ -20,6 +20,7 @@
+ #include "phy_ac.h"
+ #include "dma.h"
+ #include <linux/module.h>
++#include <net/page_pool/helpers.h>
+ #include <linux/jiffies.h>
+ 
+ #define GENERIC_FILESIZE	64
+@@ -570,6 +571,20 @@
+     names[i], p->calls, (unsigned long long)p->ns, p->max_ns);
+   }
+  }
++ {
++  struct b43_dmaring *ring = dev->dma.rx_ring;
++  struct page_pool *pool = ring ? ring->rx_pool : NULL;
++  struct b43_rx_pool_diag *p = &dev->stall_diag.rx_pool;
++  n += sysfs_emit_at(buf, n,
++   "rx_pool_schema=1 requested=%u active=%u order=%u page_bytes=%u buffer_bytes=%u headroom=%u max_pages=%u hold=%u release=%u allocated=%u prepared=%u received=%u alloc_fail=%u build_fail=%u bad_addr=%u cap_fail=%u ring_released=%u\n",
++   b43_rx_pool, !!pool, pool ? ring->rx_pool_order : 0,
++   pool ? ring->rx_pool_bytes : 0, ring ? ring->rx_buffersize : 0,
++   NET_SKB_PAD, B43_RX_POOL_MAX_PAGES,
++   pool ? READ_ONCE(pool->pages_state_hold_cnt) : 0,
++   pool ? (u32)atomic_read(&pool->pages_state_release_cnt) : 0,
++   p->allocated, p->prepared, p->received, p->alloc_fail,
++   p->build_fail, p->bad_addr, p->cap_fail, p->released);
++ }
+ 	n += sysfs_emit_at(buf, n, "rx_direction_schema=1 requested_bidir=%u active_bidir=%u\n",
+ 		b43_rx_bidir, dev->dma.rx_ring &&
+ 		dev->dma.rx_ring->rx_dma_dir == DMA_BIDIRECTIONAL);

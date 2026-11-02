@@ -1,0 +1,2503 @@
+--- a/b43.h
++++ b/b43.h
+@@ -1,6 +1,8 @@
+ /* SPDX-License-Identifier: GPL-2.0 */
+ #ifndef B43_H_
+ #define B43_H_
++
++#include "stall_diag.h"
+ 
+ #include <linux/kernel.h>
+ #include <linux/spinlock.h>
+@@ -1011,6 +1013,8 @@
+ 	 * DMA or PIO data transfers. */
+ 	bool __using_pio_transfers;
+ 
++	struct b43_stall_diag stall_diag;
++
+ 	/* Various statistics about the physical device. */
+ 	struct b43_stats stats;
+ 
+@@ -1063,6 +1067,11 @@
+ };
+ 
+ /* Data structure for the WLAN parts (802.11 cores) of the b43 chip. */
++extern bool b43_rx_hw_amsdu_guard;
++extern bool b43_rx_sync_len;
++extern bool b43_defer_mac;
++extern bool b43_defer_splice;
++
+ struct b43_wl {
+ 	/* Pointer to the active wireless device on this chip */
+ 	struct b43_wldev *current_dev;
+@@ -1124,6 +1133,14 @@
+ 
+ 	/* Packet transmit work */
+ 	struct work_struct tx_work;
++	/* Upstream deferred delivery queues; IRQ synchronization precedes purge. */
++	struct sk_buff_head defer_rx_queue, defer_txstatus_queue;
++	atomic_t defer_splice_batches[2], defer_splice_frames[2];
++	atomic_t defer_rx_queued, defer_rx_delivered;
++	atomic_t defer_tx_queued, defer_tx_delivered;
++	u32 defer_rx_peak, defer_tx_peak, defer_last_ticks, defer_max_ticks;
++	atomic_t rxsync_headers, rxsync_payloads, rxsync_skips;
++	u32 rxsync_lastlen;
+ 
+ 	/* Queue of packets to be transmitted. */
+ 	struct sk_buff_head tx_queue[B43_QOS_QUEUE_NUM];
+--- /dev/null
++++ b/stall_diag.h
+@@ -0,0 +1,136 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_STALL_DIAG_H_
++#define B43_STALL_DIAG_H_
++
++#include <linux/atomic.h>
++#include <linux/types.h>
++#include "service_diag.h"
++#include "dma_cost.h"
++#include "rx_pool_diag.h"
++
++enum b43_stall_counter {
++	B43_SD_TX_POST,
++	B43_SD_TX_COMPLETE,
++	B43_SD_TX_STATUS,
++	B43_SD_TX_INTERMEDIATE,
++	B43_SD_TX_AMPDU_STATUS,
++	B43_SD_TX_AMPDU_MPDUS,
++	B43_SD_TX_AMPDU_ACKED,
++	B43_SD_TX_BAD_COOKIE,
++	B43_SD_TX_OUT_OF_ORDER,
++	B43_SD_TX_SKIP,
++	B43_SD_TX_POISON,
++	B43_SD_TX_INVALID_BOUNDS,
++	B43_SD_TX_MAP_FAIL,
++	B43_SD_QUEUE_STOP,
++	B43_SD_QUEUE_WAKE,
++	B43_SD_RX_BUFFER,
++	B43_SD_RX_ZERO,
++	B43_SD_RX_POISON,
++	B43_SD_RX_ALLOC_FAIL,
++	B43_SD_RX_OVERSIZE,
++	B43_SD_RX_UNDERRUN,
++	B43_SD_IRQ_THREAD,
++	B43_SD_BA_RX_START,
++	B43_SD_BA_RX_STOP,
++	B43_SD_BA_TX_OPERATIONAL,
++	B43_SD_BA_TX_STOP,
++	B43_SD_TX_HW_KEY,
++	B43_SD_RX_HW_DECRYPTED,
++	B43_SD_TX_SECOND_INVALID,
++	B43_SD_RX_HANDOFF,
++	B43_SD_RX_DROP,
++	B43_SD_COUNT
++};
++
++/* All fields below are protected by the existing wl->mutex.
++ * Counters are modulo2^32. pub_arg is the driver's argument, not a readback.
++ * Cursor indices are actual implementation slots, never invented generations.
++ */
++#include "rx_boundary_diag.h"
++
++struct b43_rx_flow_diag {
++ u32 beacon, own_data, group_data, other_data;
++ u32 own_dec_error_attempt, own_fcs, own_hw_decrypted, own_handoff;
++ u32 pub_count;
++ int pub_arg;
++ unsigned long pub_j;
++ bool underrun_pending, first_captured, post_valid;
++ u32 reason;
++ unsigned long pre_j, post_j;
++ int pre_driver_next, pre_hw_next, pre_nr, pre_pub_arg;
++ u32 pre_pub_count, pre_rx_buffer, pre_handoff;
++ int post_driver_next, post_calls, post_pub_arg;
++ u32 post_pub_count, post_rx_buffer, post_handoff;
++};
++
++/* Private driver state only; no external kernel/mac80211 struct changes. */
++struct b43_stall_diag {
++	struct b43_rxb_diag rx_boundary;
++	struct b43_rx_flow_diag rx_flow;
++	struct b43_service_diag service;
++	struct b43_dma_cost dma_cost;
++	struct b43_rx_pool_diag rx_pool;
++	atomic_t count[B43_SD_COUNT]; /* modulo 2^32, never reset by a read */
++	atomic_t ba_win[16]; /* last TX BA callback per TID, not every peer */
++	u32 ampdu_hist[5]; /* 0/1, 2-7, 8-15, 16-31, >=32 MPDUs/status */
++	u32 first_bad_status[8]; /* first absent second-package valid bit */
++	u32 last_status[8]; /* copied from normal FIFO read; never reread FIFO */
++	unsigned long posted[5], reclaimed[5];
++	u32 rx_batch_max;
++	u32 first_ownership_reason, first_ownership_raw[8];
++	int first_ownership_ring, first_ownership_nr, first_ownership_used;
++	int first_ownership_producer, first_ownership_slot;
++	u32 first_ownership_mpdus, first_ownership_post, first_ownership_complete;
++	unsigned long first_ownership_j;
++	bool registered;
++};
++
++extern bool b43_stall_diag_enabled;
++extern bool b43_stall_hot_detail;
++extern bool b43_dma_cost_enabled;
++extern bool b43_rx_bidir;
++struct b43_wldev;
++int b43_stall_diag_register(struct b43_wldev *dev);
++void b43_stall_diag_unregister(struct b43_wldev *dev);
++
++#define B43_SD_INC(dev, name) do { \
++	if (unlikely(b43_stall_diag_enabled)) \
++		atomic_inc(&(dev)->stall_diag.count[B43_SD_ ## name]); \
++} while (0)
++#define B43_SD_ADD(dev, name, n) do { \
++	if (unlikely(b43_stall_diag_enabled)) \
++		atomic_add((n), &(dev)->stall_diag.count[B43_SD_ ## name]); \
++} while (0)
++
++static inline unsigned int b43_stall_diag_bucket(unsigned int n)
++{
++	return n < 2 ? 0 : n < 8 ? 1 : n < 16 ? 2 : n < 32 ? 3 : 4;
++}
++
++/* Observations only: reasons 1=geometry, 2=alignment, 4=budget.
++ * No descriptor dereference, hardware access, allocation or policy decision.
++ */
++static inline unsigned int b43_sd_ownership_reason(int nr, int used,
++					 int producer, int slot,
++					 unsigned int mpdus)
++{
++	unsigned int frames = mpdus ? mpdus : 1;
++	unsigned int skipped = 0;
++	int first, next;
++
++	if (nr <= 0 || nr > 256 || (nr & 1) || used < 2 || used > nr ||
++	    producer < 0 || producer >= nr || slot < 0 || slot >= nr)
++		return 1;
++	first = producer - used + 1;
++	if (first < 0)
++		first += nr;
++	if ((used & 1) || (first & 1) || (slot & 1))
++		return 2;
++	next = first + 2 == nr ? 0 : first + 2;
++	if (slot != first && slot == next)
++		skipped = 1;
++	return frames > (unsigned int)used / 2 - skipped ? 4 : 0;
++}
++
++#endif /* B43_STALL_DIAG_H_ */
+--- a/sysfs.c
++++ b/sysfs.c
+@@ -17,6 +17,11 @@
+ #include "sysfs.h"
+ #include "main.h"
+ #include "phy_common.h"
++#include "phy_ac.h"
++#include "dma.h"
++#include <linux/module.h>
++#include <net/page_pool/helpers.h>
++#include <linux/jiffies.h>
+ 
+ #define GENERIC_FILESIZE	64
+ 
+@@ -134,3 +139,503 @@
+ 
+ 	device_remove_file(dev, &dev_attr_interference);
+ }
++
++/* Phase 2 lab diagnostics: disabled by default; no reset or repair action. */
++bool b43_stall_diag_enabled;
++bool b43_dma_cost_enabled;
++module_param_named(dma_cost, b43_dma_cost_enabled, bool, 0400);
++MODULE_PARM_DESC(dma_cost, "Sample bounded RX DMA operation durations (lab only, default off)");
++/* Preserve all fault counters; optionally omit hot normal-RX detail. */
++bool b43_stall_hot_detail = true;
++module_param_named(stall_hot_detail, b43_stall_hot_detail, bool, 0400);
++MODULE_PARM_DESC(stall_hot_detail, "Collect normal RX boundary and fine service timing (default on)");
++module_param_named(stall_diag, b43_stall_diag_enabled, bool, 0400);
++MODULE_PARM_DESC(stall_diag, "Enable read-only stall counters at module load (lab only)");
++
++static const char * const b43_sd_names[] = {
++	[B43_SD_RX_HANDOFF] = "rx_handoff",
++	[B43_SD_RX_DROP] = "rx_drop",
++	[B43_SD_TX_SECOND_INVALID] = "tx_second_invalid",
++	[B43_SD_TX_POST] = "tx_post",
++	[B43_SD_TX_COMPLETE] = "tx_complete",
++	[B43_SD_TX_STATUS] = "tx_status",
++	[B43_SD_TX_INTERMEDIATE] = "tx_intermediate",
++	[B43_SD_TX_AMPDU_STATUS] = "tx_ampdu_status",
++	[B43_SD_TX_AMPDU_MPDUS] = "tx_ampdu_mpdus",
++	[B43_SD_TX_AMPDU_ACKED] = "tx_ampdu_acked",
++	[B43_SD_TX_BAD_COOKIE] = "tx_bad_cookie",
++	[B43_SD_TX_OUT_OF_ORDER] = "tx_out_of_order",
++	[B43_SD_TX_SKIP] = "tx_skip",
++	[B43_SD_TX_POISON] = "tx_poison",
++	[B43_SD_TX_INVALID_BOUNDS] = "tx_invalid_bounds",
++	[B43_SD_TX_MAP_FAIL] = "tx_map_fail",
++	[B43_SD_QUEUE_STOP] = "queue_stop",
++	[B43_SD_QUEUE_WAKE] = "queue_wake",
++	[B43_SD_RX_BUFFER] = "rx_buffer",
++	[B43_SD_RX_ZERO] = "rx_zero",
++	[B43_SD_RX_POISON] = "rx_poison",
++	[B43_SD_RX_ALLOC_FAIL] = "rx_alloc_fail",
++	[B43_SD_RX_OVERSIZE] = "rx_oversize",
++	[B43_SD_RX_UNDERRUN] = "rx_underrun",
++	[B43_SD_IRQ_THREAD] = "irq_thread",
++	[B43_SD_BA_RX_START] = "ba_rx_start",
++	[B43_SD_BA_RX_STOP] = "ba_rx_stop",
++	[B43_SD_BA_TX_OPERATIONAL] = "ba_tx_operational",
++	[B43_SD_BA_TX_STOP] = "ba_tx_stop",
++	[B43_SD_TX_HW_KEY] = "tx_hw_key",
++	[B43_SD_RX_HW_DECRYPTED] = "rx_hw_decrypted",
++};
++
++/* The legacy dev_to_b43_wldev() assumes an SSB device wrapper.
++ * This attribute also belongs to BCMA cores, whose device embedding differs.
++ * Select the bus before converting; never interpret one layout as the other.
++ */
++static struct b43_wldev *b43_stall_diag_wldev(struct device *device)
++{
++	if (!device || !device->bus || !device->bus->name)
++		return NULL;
++#ifdef CPTCFG_B43_BCMA
++	if (!strcmp(device->bus->name, "bcma"))
++		return bcma_get_drvdata(container_of(device,
++						    struct bcma_device, dev));
++#endif
++#ifdef CPTCFG_B43_SSB
++	if (!strcmp(device->bus->name, "ssb")) {
++		struct ssb_device *sdev = dev_to_ssb_dev(device);
++
++		return sdev ? ssb_get_drvdata(sdev) : NULL;
++	}
++#endif
++	return NULL;
++}
++
++static ssize_t stall_diag_show(struct device *device,
++			       struct device_attribute *attr, char *buf)
++{
++	struct b43_wldev *dev;
++	struct b43_stall_diag *d;
++	struct b43_dmaring *rings[6];
++	ssize_t n = 0;
++	unsigned int i, j;
++	bool live;
++
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++	dev = b43_stall_diag_wldev(device);
++	if (!dev || !dev->wl || !dev->dev || dev->dev->dev != device)
++		return -ENODEV;
++	d = &dev->stall_diag;
++	/* Never wait behind a potentially stuck interrupt/work handler. */
++	if (!mutex_trylock(&dev->wl->mutex))
++		return -EBUSY;
++	live = b43_status(dev) == B43_STAT_STARTED;
++	n += sysfs_emit_at(buf, n,
++		"schema=2 enabled=%u live=%u jiffies=%lu status=%d mac_suspended=%d cac=%u\n",
++		b43_stall_diag_enabled, live, jiffies, b43_status(dev),
++		dev->mac_suspended, dev->cac_pending);
++	n += sysfs_emit_at(buf, n, "hot_detail=%u\n", b43_stall_hot_detail);
++	for (i = 0; i < B43_SD_COUNT; i++)
++		n += sysfs_emit_at(buf, n, "%s=%u\n", b43_sd_names[i],
++				   (u32)atomic_read(&d->count[i]));
++	n += sysfs_emit_at(buf, n,
++		"hist_0_1_2_7_8_15_16_31_32plus=%u,%u,%u,%u,%u rx_batch_max=%u\n",
++		 d->ampdu_hist[0], d->ampdu_hist[1], d->ampdu_hist[2],
++		 d->ampdu_hist[3], d->ampdu_hist[4], d->rx_batch_max);
++	n += sysfs_emit_at(buf, n, "last_status=");
++	for (i = 0; i < 8; i++)
++		n += sysfs_emit_at(buf, n, "%08x%c", d->last_status[i],
++				   i == 7 ? '\n' : ',');
++	n += sysfs_emit_at(buf, n, "first_bad_status=");
++	for (i = 0; i < 8; i++)
++		n += sysfs_emit_at(buf, n, "%08x%c", d->first_bad_status[i],
++				   i == 7 ? '\n' : ',');
++	n += sysfs_emit_at(buf, n, "last_tx_ba_window_tid=");
++	for (i = 0; i < 16; i++)
++		n += sysfs_emit_at(buf, n, "%u%c",
++			 (u32)atomic_read(&d->ba_win[i]), i == 15 ? '\n' : ',');
++	n += sysfs_emit_at(buf, n,
++		"first_ownership reason=%u j=%lu ring=%d nr=%d used=%d producer=%d slot=%d mpdus=%u post=%u complete=%u raw=",
++		d->first_ownership_reason, d->first_ownership_j,
++		d->first_ownership_ring, d->first_ownership_nr,
++		d->first_ownership_used, d->first_ownership_producer,
++		d->first_ownership_slot, d->first_ownership_mpdus,
++		d->first_ownership_post, d->first_ownership_complete);
++	for (i = 0; i < 8; i++)
++		n += sysfs_emit_at(buf, n, "%08x%c", d->first_ownership_raw[i],
++				   i == 7 ? '\n' : ',');
++	{
++		const struct b43_rx_flow_diag *r = &d->rx_flow;
++
++		n += sysfs_emit_at(buf, n,
++			"rxflow_schema=1 own_mac=%pM beacon=%u own_data=%u group_data=%u other_data=%u own_dec_error_attempt=%u own_fcs=%u own_hw_decrypted=%u own_handoff=%u\n",
++			dev->wl->mac_addr, r->beacon, r->own_data, r->group_data,
++			r->other_data, r->own_dec_error_attempt, r->own_fcs,
++			r->own_hw_decrypted, r->own_handoff);
++		n += sysfs_emit_at(buf, n,
++			"rx_publish_argument=%d count=%u j=%lu\n",
++			r->pub_arg, r->pub_count, r->pub_j);
++		n += sysfs_emit_at(buf, n,
++			"first_rx_underrun captured=%u post_valid=%u reason=%08x pre_j=%lu pre_driver_next=%d pre_hw_next=%d nr=%d pre_pub_arg=%d pre_pub_count=%u pre_rx_buffer=%u pre_handoff=%u post_j=%lu post_driver_next=%d loop_calls=%d post_pub_arg=%d post_pub_count=%u post_rx_buffer=%u post_handoff=%u\n",
++			r->first_captured, r->post_valid, r->reason,
++			r->pre_j, r->pre_driver_next, r->pre_hw_next, r->pre_nr,
++			r->pre_pub_arg, r->pre_pub_count, r->pre_rx_buffer,
++			r->pre_handoff, r->post_j, r->post_driver_next,
++			r->post_calls, r->post_pub_arg, r->post_pub_count,
++			r->post_rx_buffer, r->post_handoff);
++	}
++	{
++		const struct b43_service_diag *s = &d->service;
++		const struct b43_service_span *p = s->first_seen ?
++			s->first_span : s->span;
++		unsigned long at = s->first_seen ? s->first_j : jiffies;
++		u32 pg = s->first_seen ? s->first_pub_gap :
++			d->rx_flow.pub_count ? (u32)(at - d->rx_flow.pub_j) : 0;
++		u32 gap = s->first_seen ? s->first_rx_gap : s->rx_gap;
++		u32 hand = s->first_seen ? s->first_handoff : s->handoff;
++		u32 seen = s->first_seen ?
++			s->first_rx_gap_irqs : s->rx_gap_irqs;
++		u32 entries = s->first_seen ?
++			s->first_tx_entries : s->tx_entries;
++
++		/* One view only: before an underrun show live spans; afterwards
++		 * preserve the immutable pre-underrun spans. Tuple order is
++		 * last and maximum duration, last-end only for RX/IRQ. Durations
++		 * use 1024ns ticks; at/pg_j retain jiffies. n=TX entries/RX-gap IRQs.
++		 */
++		n += sysfs_emit_at(buf, n,
++			"service_schema=2 view=%s tick_ns=1024 at=%lu pg_j=%u gap=%u hand=%u tx=%u,%u rx=%u,%u,%lu ip=%u,%u bh=%u,%u lock=%u,%u irq=%u,%u,%lu n=%u/%u\n",
++			s->first_seen ? "first" : "live",
++			at, pg, gap, hand,
++			p[1].last, p[1].max,
++			p[0].last, p[0].max, p[0].end,
++			p[2].last, p[2].max,
++			p[3].last, p[3].max,
++			p[4].last, p[4].max,
++			p[5].last, p[5].max, p[5].end, entries, seen);
++	}
++	if (!live || dev->phy.type != B43_PHYTYPE_AC ||
++	    b43_using_pio_transfers(dev))
++		goto out;
++	/* No TX-status FIFO reads: those consume completion records. */
++	n += sysfs_emit_at(buf, n,
++		"irq_last=%08x irq_mask_sw=%08x irq_mask_hw=%08x macctl=%08x maccmd=%08x phy_state=%04x\n",
++		READ_ONCE(dev->irq_reason), READ_ONCE(dev->irq_mask),
++		b43_read32(dev, B43_MMIO_GEN_IRQ_MASK),
++		b43_read32(dev, B43_MMIO_MACCTL),
++		b43_read32(dev, B43_MMIO_MACCMD), dev->phy.ac->status_mask);
++	rings[0] = dev->dma.tx_ring_AC_BK;
++	rings[1] = dev->dma.tx_ring_AC_BE;
++	rings[2] = dev->dma.tx_ring_AC_VI;
++	rings[3] = dev->dma.tx_ring_AC_VO;
++	rings[4] = dev->dma.tx_ring_mcast;
++	rings[5] = dev->dma.rx_ring;
++	for (i = 0; i < ARRAY_SIZE(rings); i++) {
++		struct b43_dmaring *r = rings[i];
++		u16 ctl, index, status;
++
++		if (!r)
++			continue;
++		if (r->type == B43_DMA_64BIT) {
++			ctl = r->tx ? B43_DMA64_TXCTL : B43_DMA64_RXCTL;
++			index = r->tx ? B43_DMA64_TXINDEX : B43_DMA64_RXINDEX;
++			status = r->tx ? B43_DMA64_TXSTATUS : B43_DMA64_RXSTATUS;
++		} else {
++			ctl = r->tx ? B43_DMA32_TXCTL : B43_DMA32_RXCTL;
++			index = r->tx ? B43_DMA32_TXINDEX : B43_DMA32_RXINDEX;
++			status = r->tx ? B43_DMA32_TXSTATUS : B43_DMA32_RXSTATUS;
++		}
++		n += sysfs_emit_at(buf, n,
++			"%s%u used=%d nr=%d swslot=%d stopped=%u ctl=%08x index=%08x status=%08x",
++			r->tx ? "tx" : "rx", r->index, r->used_slots,
++			r->nr_slots, r->current_slot, r->stopped,
++			b43_dma_read(r, ctl), b43_dma_read(r, index),
++			b43_dma_read(r, status));
++		if (r->type == B43_DMA_64BIT)
++			n += sysfs_emit_at(buf, n, " error=%08x",
++				b43_dma_read(r, r->tx ? B43_DMA64_TXERROR :
++						       B43_DMA64_RXERROR));
++		if (r->tx && r->index < 5)
++			n += sysfs_emit_at(buf, n, " posted_j=%lu reclaimed_j=%lu",
++				 d->posted[r->index], d->reclaimed[r->index]);
++		n += sysfs_emit_at(buf, n, "\n");
++	}
++	for (j = 0; j < B43_QOS_QUEUE_NUM; j++)
++		n += sysfs_emit_at(buf, n, "swq%u len=%u stopped=%u\n", j,
++			skb_queue_len(&dev->wl->tx_queue[j]),
++			READ_ONCE(dev->wl->tx_queue_stopped[j]));
++out:
++	mutex_unlock(&dev->wl->mutex);
++	return n;
++}
++static DEVICE_ATTR_RO(stall_diag);
++
++/* Separate bounded page: do not consume the existing ring snapshot budget.
++ * These are configuration-register reads, never interrupt-reason ACKs or
++ * TX-status FIFO reads. wl->mutex protects device state and cached counters.
++ */
++static ssize_t stall_irqcfg_show(struct device *device,
++				 struct device_attribute *attr, char *buf)
++{
++	struct b43_wldev *dev;
++	const struct b43_service_diag *s;
++	u32 lazy0 = 0, lazy3 = 0, mask0 = 0;
++	const struct b43_irq_event *events, *e;
++	u32 next, count;
++	unsigned int i, slot;
++	ssize_t n;
++	bool live;
++
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++	dev = b43_stall_diag_wldev(device);
++	if (!dev || !dev->wl || !dev->dev || dev->dev->dev != device)
++		return -ENODEV;
++	if (!mutex_trylock(&dev->wl->mutex))
++		return -EBUSY;
++	s = &dev->stall_diag.service;
++	live = b43_status(dev) == B43_STAT_STARTED &&
++	       dev->phy.type == B43_PHYTYPE_AC &&
++	       !b43_using_pio_transfers(dev);
++	if (live) {
++		/* D11 receive-lazy controls: also written in b43_chip_init(). */
++		lazy0 = b43_read32(dev, 0x0100);
++		lazy3 = b43_read32(dev, 0x010C);
++		mask0 = b43_read32(dev, B43_MMIO_DMA0_IRQ_MASK);
++	}
++	n = sysfs_emit(buf,
++		       "irqcfg_schema=1 enabled=%u live=%u jiffies=%lu lazy0=%08x lazy3=%08x dma0_mask=%08x hand=%u max_hand=%u tick_ns=1024 irq_saved=%08x dma0_saved=%08x max_gap=%u max_tx_entries=%u\n",
++		       b43_stall_diag_enabled, live, jiffies, lazy0, lazy3, mask0,
++		       s->handoff, s->max_handoff, READ_ONCE(dev->irq_reason),
++		       READ_ONCE(dev->dma_reason[0]), s->max_rx_gap, s->max_tx_entries);
++	events = s->history_frozen ? s->frozen_history : s->history;
++	next = s->history_frozen ? s->frozen_next : s->history_next;
++	count = s->history_frozen ? s->frozen_count : s->history_count;
++	count = min_t(u32, count, B43_IRQ_HISTORY);
++	n += sysfs_emit_at(buf, n,
++			   "irq_history_schema=1 frozen=%u count=%u capacity=8 tick_ns=1024 freeze=%u last_rx_end=%u\\n",
++			   s->history_frozen, count,
++			   s->freeze_clock, s->freeze_rx_end);
++	for (i = 0; i < count; i++) {
++		slot = (next + B43_IRQ_HISTORY - count + i) %
++		       B43_IRQ_HISTORY;
++		e = &events[slot];
++		n += sysfs_emit_at(buf, n,
++				   "irq_history=%u hard=%u lock=%u thread=%u rx_begin=%u rx_end=%u end=%u reason=%08x dma0=%08x\\n",
++				   i, e->hard, e->lock, e->thread,
++				   e->rx_begin, e->rx_end, e->end,
++				   e->reason, e->dma0);
++	}
++	if (s->history_frozen && s->frozen_irq_active) {
++		e = &s->frozen_active_irq;
++		n += sysfs_emit_at(buf, n,
++				   "irq_history_active=1 hard=%u lock=%u thread=%u rx_begin=%u rx_end=%u end=%u reason=%08x dma0=%08x\\n",
++				   e->hard, e->lock, e->thread,
++				   e->rx_begin, e->rx_end, e->end,
++				   e->reason, e->dma0);
++	}
++	mutex_unlock(&dev->wl->mutex);
++	return n;
++}
++static DEVICE_ATTR_RO(stall_irqcfg);
++
++
++static ssize_t b43_rxb_format(char *buf, const struct b43_rxb_diag *d)
++{
++	ssize_t n;
++	unsigned int i, slot;
++	const struct b43_rxb_sample *s;
++
++	n = sysfs_emit(buf,
++		       "rx_boundary_schema=1 class_count=%u history_count=%u capacity=8 first_msdu_only=1 slot_full=%u\n",
++		       B43_RXB_CLASSES, d->count, d->slot_full);
++	for (i = 0; i < B43_RXB_CLASSES; i++)
++		n += sysfs_emit_at(buf, n, "rxb_class=%u count=%u\n",
++				   i, d->classes[i]);
++	for (i = 0; i < B43_RXB_FLOWS; i++) {
++		const struct b43_rxb_flow *f = &d->flow[i];
++
++		if (f->packets)
++			n += sysfs_emit_at(buf, n,
++					   "rxb_flow=%u dport=%u packets=%u ip_bytes=%u seq=%08x ip_len=%u at=%u\n",
++					   i, f->dport, f->packets, f->ip_bytes,
++					   f->tcp_seq, f->ip_length, f->at);
++	}
++	n += sysfs_emit_at(buf, n,
++			   "hw_amsdu_schema=1 enabled=%u seen=%u dropped=%u tid0_valid=%u other_valid=%u\n",
++			   b43_rx_hw_amsdu_guard, d->hw_amsdu_seen,
++			   d->hw_amsdu_dropped, d->hw_amsdu_valid[0],
++			   d->hw_amsdu_valid[1]);
++	for (i = 0; i < 2; i++) {
++		if (!d->hw_amsdu_valid[i])
++			continue;
++		s = &d->hw_amsdu_first[i];
++		n += sysfs_emit_at(buf, n,
++				   "hw_amsdu_sample=%u at=%u len=%u fc=%04x seqctl=%04x tid=%u class=%u amsdu=%u mac=%08x pn=%02x%02x%02x%02x%02x%02x\n",
++				   i, s->at, s->length, s->fc, s->seqctl,
++				   s->tid, s->class, s->amsdu, s->macstat,
++				   s->pn[5], s->pn[4], s->pn[3], s->pn[2],
++				   s->pn[1], s->pn[0]);
++	}
++	/* Emit the immutable first unexpected LLC, then the bounded tail. */
++	for (i = 0; i <= d->count; i++) {
++		if (!i) {
++			if (!d->first_bad_valid)
++				continue;
++			s = &d->first_bad;
++		} else {
++			slot = (d->next + B43_RXB_HISTORY - d->count + i - 1) %
++			       B43_RXB_HISTORY;
++			s = &d->recent[slot];
++		}
++		n += sysfs_emit_at(buf, n,
++				   "rxb_sample=%u at=%u len=%u fc=%04x seqctl=%04x tid=%u class=%u amsdu=%u mac=%08x flags_low32=%08x pn=%02x%02x%02x%02x%02x%02x port=%u tcpseq=%08x iplen=%u\n",
++				   i, s->at, s->length, s->fc, s->seqctl,
++				   s->tid, s->class, s->amsdu, s->macstat,
++				   s->flags, s->pn[5], s->pn[4], s->pn[3],
++				   s->pn[2], s->pn[1], s->pn[0], s->dport,
++				   s->tcp_seq, s->ip_length);
++	}
++	return n;
++}
++
++static ssize_t stall_rxboundary_show(struct device *device,
++				     struct device_attribute *attr, char *buf)
++{
++	struct b43_wldev *dev;
++	ssize_t n;
++
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++	dev = b43_stall_diag_wldev(device);
++	if (!dev || !dev->wl || !dev->dev || dev->dev->dev != device)
++		return -ENODEV;
++	if (!mutex_trylock(&dev->wl->mutex))
++		return -EBUSY;
++	n = b43_rxb_format(buf, &dev->stall_diag.rx_boundary);
++	mutex_unlock(&dev->wl->mutex);
++	return n;
++}
++static DEVICE_ATTR_RO(stall_rxboundary);
++
++static ssize_t stall_defer_show(struct device *device,
++			       struct device_attribute *attr, char *buf)
++{
++	struct b43_wldev *dev;
++	struct b43_wl *wl;
++	ssize_t n;
++
++	if (!capable(CAP_NET_ADMIN))
++		return -EPERM;
++	dev = b43_stall_diag_wldev(device);
++	if (!dev || !dev->wl || !dev->dev || dev->dev->dev != device)
++		return -ENODEV;
++	wl = dev->wl;
++	if (!mutex_trylock(&wl->mutex))
++		return -EBUSY;
++	/* Individual scalar reads, not an atomic queue/counter snapshot:
++	 * delivery is deliberately outside this mutex.
++	 */
++	n = sysfs_emit(buf,
++		       "defer_schema=1 enabled=%u rx_queued=%u rx_delivered=%u tx_queued=%u tx_delivered=%u rx_pending=%u tx_pending=%u rx_peak=%u tx_peak=%u last_ticks=%u max_ticks=%u tick_ns=1024 sync_mode=%u sync_headers=%u sync_payloads=%u sync_skips=%u sync_lastlen=%u\n",
++		       b43_defer_mac, atomic_read(&wl->defer_rx_queued),
++		       atomic_read(&wl->defer_rx_delivered),
++		       atomic_read(&wl->defer_tx_queued),
++		       atomic_read(&wl->defer_tx_delivered),
++		       skb_queue_len(&wl->defer_rx_queue),
++		       skb_queue_len(&wl->defer_txstatus_queue),
++		       READ_ONCE(wl->defer_rx_peak), READ_ONCE(wl->defer_tx_peak),
++		       READ_ONCE(wl->defer_last_ticks),
++		       READ_ONCE(wl->defer_max_ticks), b43_rx_sync_len,
++		       atomic_read(&wl->rxsync_headers),
++		       atomic_read(&wl->rxsync_payloads),
++		       atomic_read(&wl->rxsync_skips),
++		       READ_ONCE(wl->rxsync_lastlen));
++	n += sysfs_emit_at(buf, n, "defer_batch_schema=1 enabled=%u rx_batches=%u rx_frames=%u tx_batches=%u tx_frames=%u\n",
++		b43_defer_splice, atomic_read(&wl->defer_splice_batches[0]),
++		atomic_read(&wl->defer_splice_frames[0]), atomic_read(&wl->defer_splice_batches[1]),
++		atomic_read(&wl->defer_splice_frames[1]));
++ {
++  static const char * const names[B43_DMA_COST_COUNT] = {
++   "header", "alloc", "map", "replace", "unmap", "handoff", "clock"
++  };
++  struct b43_dma_cost *cost = &dev->stall_diag.dma_cost;
++  unsigned int i;
++  n += sysfs_emit_at(buf, n,
++   "dma_cost_schema=1 enabled=%u divisor=%u limit=%u rx_calls=%u sampled=%u\n",
++   b43_dma_cost_enabled, B43_DMA_COST_DIVISOR, B43_DMA_COST_LIMIT,
++   cost->rx_calls, cost->sampled);
++  for (i = 0; i < B43_DMA_COST_COUNT; i++) {
++   struct b43_dma_cost_span *p = &cost->span[i];
++   n += sysfs_emit_at(buf, n,
++    "dma_cost_%s calls=%u ns=%llu max_ns=%u\n",
++    names[i], p->calls, (unsigned long long)p->ns, p->max_ns);
++  }
++ }
++ {
++  struct b43_dmaring *ring = dev->dma.rx_ring;
++  struct page_pool *pool = ring ? ring->rx_pool : NULL;
++  struct b43_rx_pool_diag *p = &dev->stall_diag.rx_pool;
++  n += sysfs_emit_at(buf, n,
++   "rx_pool_schema=1 requested=%u active=%u order=%u page_bytes=%u buffer_bytes=%u headroom=%u max_pages=%u hold=%u release=%u allocated=%u prepared=%u received=%u alloc_fail=%u build_fail=%u bad_addr=%u cap_fail=%u ring_released=%u\n",
++   b43_rx_pool, !!pool, pool ? ring->rx_pool_order : 0,
++   pool ? ring->rx_pool_bytes : 0, ring ? ring->rx_buffersize : 0,
++   NET_SKB_PAD, B43_RX_POOL_MAX_PAGES,
++   pool ? READ_ONCE(pool->pages_state_hold_cnt) : 0,
++   pool ? (u32)atomic_read(&pool->pages_state_release_cnt) : 0,
++   p->allocated, p->prepared, p->received, p->alloc_fail,
++   p->build_fail, p->bad_addr, p->cap_fail, p->released);
++ }
++	n += sysfs_emit_at(buf, n, "rx_direction_schema=1 requested_bidir=%u active_bidir=%u\n",
++		b43_rx_bidir, dev->dma.rx_ring &&
++		dev->dma.rx_ring->rx_dma_dir == DMA_BIDIRECTIONAL);
++	mutex_unlock(&wl->mutex);
++	return n;
++}
++static DEVICE_ATTR_RO(stall_defer);
++
++int b43_stall_diag_register(struct b43_wldev *dev)
++{
++	unsigned int i;
++	int err;
++
++	if (!b43_stall_diag_enabled || dev->phy.type != B43_PHYTYPE_AC)
++		return 0;
++	for (i = 0; i < B43_SD_COUNT; i++)
++		atomic_set(&dev->stall_diag.count[i], 0);
++	for (i = 0; i < 16; i++)
++		atomic_set(&dev->stall_diag.ba_win[i], 0);
++	err = device_create_file(dev->dev->dev, &dev_attr_stall_diag);
++	if (err)
++		return err;
++	err = device_create_file(dev->dev->dev, &dev_attr_stall_irqcfg);
++	if (err) {
++		device_remove_file(dev->dev->dev, &dev_attr_stall_diag);
++		return err;
++	}
++	err = device_create_file(dev->dev->dev, &dev_attr_stall_rxboundary);
++	if (err) {
++		device_remove_file(dev->dev->dev, &dev_attr_stall_irqcfg);
++		device_remove_file(dev->dev->dev, &dev_attr_stall_diag);
++		return err;
++	}
++	err = device_create_file(dev->dev->dev, &dev_attr_stall_defer);
++	if (err) {
++		device_remove_file(dev->dev->dev, &dev_attr_stall_rxboundary);
++		device_remove_file(dev->dev->dev, &dev_attr_stall_irqcfg);
++		device_remove_file(dev->dev->dev, &dev_attr_stall_diag);
++		return err;
++	}
++	dev->stall_diag.registered = true;
++	return 0;
++}
++
++void b43_stall_diag_unregister(struct b43_wldev *dev)
++{
++	if (dev->stall_diag.registered) {
++		device_remove_file(dev->dev->dev, &dev_attr_stall_defer);
++		device_remove_file(dev->dev->dev, &dev_attr_stall_rxboundary);
++		device_remove_file(dev->dev->dev, &dev_attr_stall_irqcfg);
++		device_remove_file(dev->dev->dev, &dev_attr_stall_diag);
++		dev->stall_diag.registered = false;
++	}
++}
+--- a/xmit.c
++++ b/xmit.c
+@@ -17,6 +17,8 @@
+ */
+ 
+ #include "xmit.h"
++#include "rx_hw_amsdu_diag.h"
++#include "rx_diag_class.h"
+ #include "phy_common.h"
+ #include "phy_ac.h"
+ #include "dma.h"
+@@ -748,8 +750,10 @@
+ 	BUILD_BUG_ON(sizeof(struct b43_txhdr_ac) != 128);
+ 	BUILD_BUG_ON(B43_TXH_AC_RATES > IEEE80211_TX_MAX_RATES);
+ 
+-	if (key)
++	if (key) {
++		B43_SD_INC(dev, TX_HW_KEY);
+ 		len += key->icv_len;
++	}
+ 
+ 	if (READ_ONCE(ac->thermal_throttled))
+ 		b43_txhdr_ac_one_stream(rates);
+@@ -1281,7 +1285,38 @@
+ 	}
+ }
+ 
+-void b43_rx(struct b43_wldev *dev, struct sk_buff *skb, const void *_rxhdr)
++static unsigned int b43_rx_class_observe(struct b43_wldev *dev,
++                                          const struct sk_buff *skb,
++                                          u32 macstat)
++{
++ struct b43_rx_flow_diag *d = &dev->stall_diag.rx_flow;
++ unsigned int offset, type;
++ if (!b43_stall_diag_enabled || dev->phy.type != B43_PHYTYPE_AC)
++  return 0;
++ offset = sizeof(struct b43_plcp_hdr6) +
++          ((macstat & B43_RX_MAC_PADDING) ? 2 : 0);
++ if (skb_headlen(skb) < offset + 10)
++  return 0;
++ type = b43_rx_diag_classify(skb->data + offset, skb_headlen(skb) - offset,
++                             dev->wl->mac_addr);
++ if (type & B43_RXD_BEACON)
++  d->beacon++;
++ if (type & B43_RXD_GROUP_DATA)
++  d->group_data++;
++ if (type & B43_RXD_OTHER_DATA)
++  d->other_data++;
++ if (type & B43_RXD_OWN_DATA) {
++  d->own_data++;
++  if ((macstat & B43_RX_MAC_DECERR) && (macstat & B43_RX_MAC_DEC))
++   d->own_dec_error_attempt++;
++  if (macstat & B43_RX_MAC_FCSERR)
++   d->own_fcs++;
++ }
++ return type;
++}
++
++void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
++		 const void *_rxhdr, struct list_head *rx_list)
+ {
+ 	struct ieee80211_rx_status status;
+ 	struct b43_plcp_hdr6 *plcp;
+@@ -1295,6 +1330,7 @@
+ 	u8 phytype;
+ 	bool rx_5ghz;
+ 	int padding, rate_idx;
++	unsigned int diag_class = 0;
+ 
+ 	memset(&status, 0, sizeof(status));
+ 
+@@ -1327,6 +1363,8 @@
+ 		phytype = chanstat & B43_RX_CHAN_PHYTYPE;
+ 		rx_5ghz = !!(chanstat & B43_RX_CHAN_5GHZ);
+ 	}
++
++	diag_class = b43_rx_class_observe(dev, skb, macstat);
+ 
+ 	if (unlikely(macstat & B43_RX_MAC_FCSERR)) {
+ 		dev->wl->ieee_stats.dot11FCSErrorCount++;
+@@ -1350,6 +1388,24 @@
+ 	    (dev->phy.type != B43_PHYTYPE_AC || (macstat & B43_RX_MAC_DEC)))
+ 		goto drop;
+ 
++	/* Reject incomplete hardware records before any mac80211 state update. */
++	if (dev->phy.type == B43_PHYTYPE_AC &&
++	    unlikely(macstat & B43_RX_MAC_AMSDU)) {
++		if (b43_stall_diag_enabled && !b43_using_pio_transfers(dev))
++			b43_hw_amsdu_observe(&dev->stall_diag.rx_boundary,
++					    skb->data, skb_headlen(skb), macstat,
++					    (u32)jiffies,
++					    diag_class & B43_RXD_OWN_DATA);
++		if (b43_hw_amsdu_should_drop(true,
++					   READ_ONCE(b43_rx_hw_amsdu_guard),
++					   macstat)) {
++			if (b43_stall_diag_enabled &&
++			    !b43_using_pio_transfers(dev))
++				dev->stall_diag.rx_boundary.hw_amsdu_dropped++;
++			goto drop;
++		}
++	}
++
+ 	/* Skip PLCP and padding */
+ 	padding = (macstat & B43_RX_MAC_PADDING) ? 2 : 0;
+ 	if (unlikely(skb->len < (sizeof(struct b43_plcp_hdr6) + padding))) {
+@@ -1386,6 +1442,9 @@
+ 				       "RX: Packet size underrun (3)\n");
+ 				goto drop;
+ 			}
++			B43_SD_INC(dev, RX_HW_DECRYPTED);
++			if (diag_class & B43_RXD_OWN_DATA)
++				dev->stall_diag.rx_flow.own_hw_decrypted++;
+ 			status.flag |= RX_FLAG_DECRYPTED;
+ 		}
+ 	}
+@@ -1500,15 +1559,59 @@
+ 		goto drop;
+ 	}
+ 
++	if (b43_stall_diag_enabled && b43_stall_hot_detail &&
++	    (diag_class & B43_RXD_OWN_DATA) &&
++	    dev->phy.type == B43_PHYTYPE_AC && !b43_using_pio_transfers(dev)) {
++		struct b43_rxb_sample sample = {
++			.at = (u32)jiffies,
++			.macstat = macstat,
++			.flags = (u32)status.flag,
++			.length = min_t(unsigned int, skb_headlen(skb), 65535),
++		};
++
++		b43_rxb_parse(&sample, skb->data, skb_headlen(skb),
++			      ieee80211_hdrlen(fctl),
++			      !!(status.flag & RX_FLAG_DECRYPTED));
++		b43_rxb_record(&dev->stall_diag.rx_boundary, &sample);
++	}
+ 	memcpy(IEEE80211_SKB_RXCB(skb), &status, sizeof(status));
+-	ieee80211_rx_ni(dev->wl->hw, skb);
++	B43_SD_INC(dev, RX_HANDOFF);
++	if (diag_class & B43_RXD_OWN_DATA)
++		dev->stall_diag.rx_flow.own_handoff++;
++	if (b43_defer_mac && dev->phy.type == B43_PHYTYPE_AC) {
++		struct b43_wl *wl = dev->wl;
++		u32 depth;
++
++		skb_queue_tail(&wl->defer_rx_queue, skb);
++		atomic_inc(&wl->defer_rx_queued);
++		depth = skb_queue_len(&wl->defer_rx_queue);
++		if (depth > READ_ONCE(wl->defer_rx_peak))
++			WRITE_ONCE(wl->defer_rx_peak, depth);
++	} else if (rx_list) {
++		/* The AC DMA caller holds a bounded BH-disabled window.
++		 * Filtering, crypto and reorder stay synchronous; only the
++		 * resulting network-stack output list is delivered later.
++		 */
++		rcu_read_lock();
++		ieee80211_rx_list(dev->wl->hw, NULL, skb, rx_list);
++		rcu_read_unlock();
++	} else {
++		ieee80211_rx_ni(dev->wl->hw, skb);
++	}
+ 
+ #if B43_DEBUG
+ 	dev->rx_count++;
+ #endif
+ 	return;
+ drop:
++	B43_SD_INC(dev, RX_DROP);
+ 	dev_kfree_skb_any(skb);
++}
++
++/* PIO and callers outside the trial retain immediate delivery. */
++void b43_rx(struct b43_wldev *dev, struct sk_buff *skb, const void *_rxhdr)
++{
++	b43_rx_list(dev, skb, _rxhdr, NULL);
+ }
+ 
+ /*
+@@ -1533,6 +1636,21 @@
+ {
+ 	b43_debugfs_log_txstat(dev, status);
+ 
++	if (b43_stall_diag_enabled) {
++		struct b43_stall_diag *d = &dev->stall_diag;
++
++		B43_SD_INC(dev, TX_STATUS);
++		memcpy(d->last_status, status->raw, sizeof(d->last_status));
++		if (status->intermediate)
++			B43_SD_INC(dev, TX_INTERMEDIATE);
++		if (!status->intermediate && status->mpdus > 1) {
++			B43_SD_INC(dev, TX_AMPDU_STATUS);
++			B43_SD_ADD(dev, TX_AMPDU_MPDUS, status->mpdus);
++			B43_SD_ADD(dev, TX_AMPDU_ACKED, status->mpdus_acked);
++		}
++		if (!status->intermediate)
++			d->ampdu_hist[b43_stall_diag_bucket(status->mpdus)]++;
++	}
+ 	if (status->intermediate)
+ 		return;
+ 	if (status->for_ampdu)
+--- /dev/null
++++ b/rx_boundary_diag.h
+@@ -0,0 +1,168 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_RX_BOUNDARY_DIAG_H
++#define B43_RX_BOUNDARY_DIAG_H
++
++/* Cached header metadata only. The DMA RX caller holds wl->mutex. */
++enum b43_rxb_class {
++	B43_RXB_SHORT, B43_RXB_NULL, B43_RXB_CIPHER, B43_RXB_BAD_LLC,
++	B43_RXB_SNAP_OTHER, B43_RXB_ARP, B43_RXB_IPV6, B43_RXB_EAPOL,
++	B43_RXB_IPV4_OTHER, B43_RXB_TEST, B43_RXB_CLASSES
++};
++#define B43_RXB_HISTORY 8
++#define B43_RXB_FLOWS 8
++
++struct b43_rxb_sample {
++	u32 at, macstat, flags, tcp_seq;
++	u16 length, fc, seqctl, dport, ip_length;
++	u8 tid, class, amsdu, pn[6];
++};
++struct b43_rxb_flow {
++	u32 packets, ip_bytes, tcp_seq, at;
++	u16 dport, ip_length;
++};
++struct b43_rxb_diag {
++	u32 hw_amsdu_seen, hw_amsdu_dropped;
++	bool hw_amsdu_valid[2];
++	struct b43_rxb_sample hw_amsdu_first[2];
++	u32 classes[B43_RXB_CLASSES], next, count, slot_full;
++	bool first_bad_valid;
++	struct b43_rxb_sample first_bad, recent[B43_RXB_HISTORY];
++	struct b43_rxb_flow flow[B43_RXB_FLOWS];
++};
++
++static inline u16 b43_rxb_be16(const u8 *p)
++{
++	return ((u16)p[0] << 8) | p[1];
++}
++
++/* All accesses are bounded by linear skb bytes. No crypto, skb mutation,
++ * allocation or MMIO. A-MSDU observation covers its FIRST subframe only.
++ * Classification is evidence, never an accept/drop or recovery decision.
++ */
++static inline void b43_rxb_parse(struct b43_rxb_sample *s,
++				const u8 *p, unsigned int n,
++				unsigned int hdrlen, bool decrypted)
++{
++	unsigned int off, qos, total, ihl, tcp_len, available;
++	const u8 *ip, *tcp;
++	u16 proto;
++
++	s->class = B43_RXB_SHORT;
++	if (n < 24 || hdrlen < 24 || hdrlen > n)
++		return;
++	s->fc = p[0] | ((u16)p[1] << 8);
++	s->seqctl = p[22] | ((u16)p[23] << 8);
++	s->tid = 255;
++	if (s->fc & 0x0040) {
++		s->class = B43_RXB_NULL;
++		return;
++	}
++	if (s->fc & 0x0080) {
++		qos = (s->fc & 0x0300) == 0x0300 ? 30 : 24;
++		if (qos + 2 > hdrlen)
++			return;
++		s->tid = p[qos] & 15;
++		s->amsdu = !!(p[qos] & 0x80);
++	}
++	off = hdrlen;
++	if (s->fc & 0x4000) {
++		if (n - off < 8)
++			return;
++		s->pn[0] = p[off];
++		s->pn[1] = p[off + 1];
++		s->pn[2] = p[off + 4];
++		s->pn[3] = p[off + 5];
++		s->pn[4] = p[off + 6];
++		s->pn[5] = p[off + 7];
++		if (!decrypted) {
++			s->class = B43_RXB_CIPHER;
++			return;
++		}
++		off += 8;
++	}
++	available = n - off;
++	if (s->amsdu) {
++		if (available < 14)
++			return;
++		total = b43_rxb_be16(p + off + 12);
++		off += 14;
++		available -= 14;
++		if (total > available)
++			return;
++		available = total;
++	}
++	if (available < 8)
++		return;
++	if (p[off] != 0xaa || p[off + 1] != 0xaa ||
++	    p[off + 2] != 3 || p[off + 3] || p[off + 4] ||
++	    (p[off + 5] != 0 && p[off + 5] != 0xf8)) {
++		s->class = B43_RXB_BAD_LLC;
++		return;
++	}
++	proto = b43_rxb_be16(p + off + 6);
++	s->class = proto == 0x0806 ? B43_RXB_ARP :
++		   proto == 0x86dd ? B43_RXB_IPV6 :
++		   proto == 0x888e ? B43_RXB_EAPOL : B43_RXB_SNAP_OTHER;
++	if (proto != 0x0800)
++		return;
++	s->class = B43_RXB_IPV4_OTHER;
++	ip = p + off + 8;
++	available -= 8;
++	if (available < 20 || (ip[0] >> 4) != 4)
++		return;
++	ihl = (ip[0] & 15) * 4;
++	total = b43_rxb_be16(ip + 2);
++	if (ihl < 20 || ihl > available || total > available ||
++	    total < ihl + 20 || ip[9] != 6 ||
++	    (b43_rxb_be16(ip + 6) & 0x3fff))
++		return;
++	if (ip[12] != 192 || ip[13] != 168 || ip[14] != 0 ||
++	    ip[15] != 134 || ip[16] != 192 || ip[17] != 168 ||
++	    ip[18] != 0 || ip[19] != 146)
++		return;
++	tcp = ip + ihl;
++	tcp_len = (tcp[12] >> 4) * 4;
++	if (b43_rxb_be16(tcp) != 5209 || tcp_len < 20 ||
++	    tcp_len > total - ihl)
++		return;
++	s->class = B43_RXB_TEST;
++	s->dport = b43_rxb_be16(tcp + 2);
++	s->tcp_seq = ((u32)tcp[4] << 24) | ((u32)tcp[5] << 16) |
++		     ((u32)tcp[6] << 8) | tcp[7];
++	s->ip_length = total;
++}
++
++static inline void b43_rxb_record(struct b43_rxb_diag *d,
++				 const struct b43_rxb_sample *s)
++{
++	unsigned int i;
++
++	if (s->class >= B43_RXB_CLASSES)
++		return;
++	d->classes[s->class]++;
++	d->recent[d->next] = *s;
++	d->next = (d->next + 1) % B43_RXB_HISTORY;
++	if (d->count < B43_RXB_HISTORY)
++		d->count++;
++	if (!d->first_bad_valid && s->class == B43_RXB_BAD_LLC) {
++		d->first_bad = *s;
++		d->first_bad_valid = true;
++	}
++	if (s->class != B43_RXB_TEST)
++		return;
++	for (i = 0; i < B43_RXB_FLOWS; i++) {
++		struct b43_rxb_flow *f = &d->flow[i];
++
++		if (f->packets && f->dport != s->dport)
++			continue;
++		f->dport = s->dport;
++		f->packets++;
++		f->ip_bytes += s->ip_length;
++		f->tcp_seq = s->tcp_seq;
++		f->ip_length = s->ip_length;
++		f->at = s->at;
++		return;
++	}
++	d->slot_full++;
++}
++#endif
+--- /dev/null
++++ b/defer_splice.h
+@@ -0,0 +1,15 @@
++/* Source lock protects concurrent enqueue; destination is private and empty.
++ * No allocation, register access, callbacks, or payload access under this lock.
++ * IRQ free/synchronize precedes queue purge and waits for the local consumer.
++ */
++static inline unsigned int b43_defer_take(struct sk_buff_head *source,
++                                         struct sk_buff_head *local)
++{
++ unsigned long flags;
++ unsigned int count;
++ spin_lock_irqsave(&source->lock, flags);
++ count = skb_queue_len(source);
++ skb_queue_splice_init(source, local);
++ spin_unlock_irqrestore(&source->lock, flags);
++ return count;
++}
+--- a/dma.c
++++ b/dma.c
+@@ -23,12 +23,28 @@
+ #include "xmit.h"
+ 
+ #include <linux/dma-mapping.h>
++#include <linux/interrupt.h>
+ #include <linux/pci.h>
+ #include <linux/delay.h>
+ #include <linux/skbuff.h>
+ #include <linux/etherdevice.h>
+ #include <linux/slab.h>
++#include <net/page_pool/helpers.h>
+ #include <asm/div64.h>
++
++
++/* Opt-in RAM-trial scheduling experiment, not a descriptor correction.
++ * Keep the existing RX API and ring operations. Hold the outer BH context
++ * across at most 16 packets so nested ieee80211_rx_ni() does not run pending
++ * network softirqs after every individual packet. Default remains unchanged.
++ */
++static bool b43_rx_bh_batch;
++module_param_named(rx_bh_batch, b43_rx_bh_batch, bool, 0400);
++MODULE_PARM_DESC(rx_bh_batch, "Trial bounded AC DMA RX BH batching (16 packets)");
++/* Default-off list-delivery trial, gated by the bounded AC BH window. */
++static bool b43_rx_ip_batch;
++module_param_named(rx_ip_batch, b43_rx_ip_batch, bool, 0400);
++MODULE_PARM_DESC(rx_ip_batch, "Trial AC DMA RX network-stack list batching");
+ 
+ 
+ /* Required number of TX DMA slots per TX frame.
+@@ -293,7 +309,16 @@
+  */
+ static void b43_dma_rx_give(struct b43_dmaring *ring, int slot)
+ {
+-	ring->ops->set_current_rxslot(ring, prev_slot(ring, slot));
++	int argument = prev_slot(ring, slot);
++
++	if (b43_stall_diag_enabled) {
++		struct b43_rx_flow_diag *d = &ring->dev->stall_diag.rx_flow;
++
++		d->pub_arg = argument;
++		d->pub_count++;
++		d->pub_j = jiffies;
++	}
++	ring->ops->set_current_rxslot(ring, argument);
+ }
+ 
+ #ifdef CPTCFG_B43_DEBUG
+@@ -364,6 +389,14 @@
+ 	return map32[controller_idx];
+ }
+ 
++bool b43_rx_pool;
++module_param_named(rx_pool, b43_rx_pool, bool, 0400);
++MODULE_PARM_DESC(rx_pool, "AC RX page-pool buffers (lab only, default off; requires rx_bidir/rx_sync_len)");
++
++bool b43_rx_bidir;
++module_param_named(rx_bidir, b43_rx_bidir, bool, 0400);
++MODULE_PARM_DESC(rx_bidir, "AC RX bidirectional DMA ownership (lab only, default off)");
++
+ static inline
+     dma_addr_t map_descbuffer(struct b43_dmaring *ring,
+ 			      unsigned char *buf, size_t len, int tx)
+@@ -375,7 +408,7 @@
+ 					 buf, len, DMA_TO_DEVICE);
+ 	} else {
+ 		dmaaddr = dma_map_single(ring->dev->dev->dma_dev,
+-					 buf, len, DMA_FROM_DEVICE);
++					 buf, len, ring->rx_dma_dir);
+ 	}
+ 
+ 	return dmaaddr;
+@@ -390,7 +423,7 @@
+ 				 addr, len, DMA_TO_DEVICE);
+ 	} else {
+ 		dma_unmap_single(ring->dev->dev->dma_dev,
+-				 addr, len, DMA_FROM_DEVICE);
++				 addr, len, ring->rx_dma_dir);
+ 	}
+ }
+ 
+@@ -400,7 +433,7 @@
+ {
+ 	B43_WARN_ON(ring->tx);
+ 	dma_sync_single_for_cpu(ring->dev->dev->dma_dev,
+-				    addr, len, DMA_FROM_DEVICE);
++				    addr, len, ring->rx_dma_dir);
+ }
+ 
+ static inline
+@@ -409,7 +442,7 @@
+ {
+ 	B43_WARN_ON(ring->tx);
+ 	dma_sync_single_for_device(ring->dev->dev->dma_dev,
+-				   addr, len, DMA_FROM_DEVICE);
++				   addr, len, ring->rx_dma_dir);
+ }
+ 
+ static inline
+@@ -612,32 +645,59 @@
+ 	memset(frame, 0xFF, sizeof(struct b43_plcp_hdr6) + 2 /* padding */);
+ }
+ 
++#include "rx_pool_impl.h"
++
+ static int setup_rx_descbuffer(struct b43_dmaring *ring,
+ 			       struct b43_dmadesc_generic *desc,
+-			       struct b43_dmadesc_meta *meta, gfp_t gfp_flags)
++			       struct b43_dmadesc_meta *meta, gfp_t gfp_flags,
++			       bool sample)
+ {
+ 	dma_addr_t dmaaddr;
+ 	struct sk_buff *skb;
++	u32 stamp = 0;
++	struct b43_dma_cost *cost = &ring->dev->stall_diag.dma_cost;
+ 
+ 	B43_WARN_ON(ring->tx);
+-
++	if (ring->rx_pool)
++		return b43_pool_setup(ring, desc, meta, gfp_flags, sample);
++
++	if (sample)
++		stamp = (u32)ktime_get_mono_fast_ns();
+ 	skb = __dev_alloc_skb(ring->rx_buffersize, gfp_flags);
++	if (sample)
++		b43_dma_cost_note(cost, B43_DMA_COST_ALLOC,
++			stamp, (u32)ktime_get_mono_fast_ns());
+ 	if (unlikely(!skb))
+ 		return -ENOMEM;
+ 	b43_poison_rx_buffer(ring, skb);
++	if (sample)
++		stamp = (u32)ktime_get_mono_fast_ns();
+ 	dmaaddr = map_descbuffer(ring, skb->data, ring->rx_buffersize, 0);
++	if (sample)
++		b43_dma_cost_note(cost, B43_DMA_COST_MAP,
++			stamp, (u32)ktime_get_mono_fast_ns());
+ 	if (b43_dma_mapping_error(ring, dmaaddr, ring->rx_buffersize, 0)) {
+ 		/* ugh. try to realloc in zone_dma */
+ 		gfp_flags |= GFP_DMA;
+ 
+ 		dev_kfree_skb_any(skb);
+ 
++		if (sample)
++			stamp = (u32)ktime_get_mono_fast_ns();
+ 		skb = __dev_alloc_skb(ring->rx_buffersize, gfp_flags);
++		if (sample)
++			b43_dma_cost_note(cost, B43_DMA_COST_ALLOC,
++				stamp, (u32)ktime_get_mono_fast_ns());
+ 		if (unlikely(!skb))
+ 			return -ENOMEM;
+ 		b43_poison_rx_buffer(ring, skb);
++		if (sample)
++			stamp = (u32)ktime_get_mono_fast_ns();
+ 		dmaaddr = map_descbuffer(ring, skb->data,
+ 					 ring->rx_buffersize, 0);
++		if (sample)
++			b43_dma_cost_note(cost, B43_DMA_COST_MAP,
++				stamp, (u32)ktime_get_mono_fast_ns());
+ 		if (b43_dma_mapping_error(ring, dmaaddr, ring->rx_buffersize, 0)) {
+ 			b43err(ring->dev->wl, "RX DMA buffer allocation failed\n");
+ 			dev_kfree_skb_any(skb);
+@@ -665,7 +725,7 @@
+ 	for (i = 0; i < ring->nr_slots; i++) {
+ 		desc = ring->ops->idx2desc(ring, i, &meta);
+ 
+-		err = setup_rx_descbuffer(ring, desc, meta, GFP_KERNEL);
++		err = setup_rx_descbuffer(ring, desc, meta, GFP_KERNEL, false);
+ 		if (err) {
+ 			b43err(ring->dev->wl,
+ 			       "Failed to allocate initial descbuffers\n");
+@@ -682,8 +742,12 @@
+ 	for (i--; i >= 0; i--) {
+ 		desc = ring->ops->idx2desc(ring, i, &meta);
+ 
+-		unmap_descbuffer(ring, meta->dmaaddr, ring->rx_buffersize, 0);
++		if (!ring->rx_pool)
++			unmap_descbuffer(ring, meta->dmaaddr, ring->rx_buffersize, 0);
++		else
++			sync_descbuffer_for_cpu(ring, meta->dmaaddr, ring->rx_buffersize);
+ 		dev_kfree_skb(meta->skb);
++		meta->skb = NULL;
+ 	}
+ 	goto out;
+ }
+@@ -833,8 +897,13 @@
+ 			unmap_descbuffer(ring, meta->dmaaddr,
+ 					 meta->skb->len, 1);
+ 		} else {
+-			unmap_descbuffer(ring, meta->dmaaddr,
++			if (ring->rx_pool) {
++				sync_descbuffer_for_cpu(ring, meta->dmaaddr, ring->rx_buffersize);
++				ring->dev->stall_diag.rx_pool.released++;
++			} else {
++				unmap_descbuffer(ring, meta->dmaaddr,
+ 					 ring->rx_buffersize, 0);
++			}
+ 		}
+ 		free_descriptor_buffer(ring, meta);
+ 	}
+@@ -898,6 +967,8 @@
+ 
+ 	ring->type = type;
+ 	ring->dev = dev;
++	ring->rx_dma_dir = b43_rx_bidir && dev->phy.type == B43_PHYTYPE_AC ?
++		DMA_BIDIRECTIONAL : DMA_FROM_DEVICE;
+ 	ring->mmio_base = b43_dmacontroller_base(type, controller_index);
+ 	ring->index = controller_index;
+ 	if (type == B43_DMA_64BIT)
+@@ -981,6 +1052,9 @@
+ 	err = alloc_ringmemory(ring);
+ 	if (err)
+ 		goto err_kfree_txhdr_cache;
++	err = b43_pool_create(ring);
++	if (err)
++		goto err_free_ringmemory;
+ 	err = dmacontroller_setup(ring);
+ 	if (err)
+ 		goto err_free_ringmemory;
+@@ -989,6 +1063,7 @@
+ 	return ring;
+ 
+       err_free_ringmemory:
++	b43_pool_destroy(ring);
+ 	free_ringmemory(ring);
+       err_kfree_txhdr_cache:
+ 	kfree(ring->txhdr_cache);
+@@ -1051,6 +1126,7 @@
+ 	 */
+ 	dmacontroller_cleanup(ring);
+ 	free_all_descbuffers(ring);
++	b43_pool_destroy(ring);
+ 	free_ringmemory(ring);
+ 
+ 	kfree(ring->txhdr_cache);
+@@ -1350,6 +1426,9 @@
+ 	}
+ 	/* Now transfer the whole frame. */
+ 	wmb();
++	B43_SD_INC(ring->dev, TX_POST);
++	if (b43_stall_diag_enabled)
++		ring->dev->stall_diag.posted[ring->index] = jiffies;
+ 	ops->poke_tx(ring, next_slot(ring, slot));
+ 	return 0;
+ 
+@@ -1466,6 +1545,7 @@
+ 		goto out;
+ 	}
+ 	if (unlikely(err)) {
++		B43_SD_INC(dev, TX_MAP_FAIL);
+ 		b43err(dev->wl, "DMA tx mapping failure\n");
+ 		goto out;
+ 	}
+@@ -1473,6 +1553,7 @@
+ 	    should_inject_overflow(ring)) {
+ 		/* This TX ring is full. */
+ 		unsigned int skb_mapping = skb_get_queue_mapping(skb);
++		B43_SD_INC(dev, QUEUE_STOP);
+ 		b43_stop_queue(dev, skb_mapping);
+ 		dev->wl->tx_queue_stopped[skb_mapping] = true;
+ 		ring->stopped = true;
+@@ -1510,10 +1591,48 @@
+ 
+ 	ring = parse_cookie(dev, status->cookie, &slot);
+ 	if (unlikely(!ring)) {
++		B43_SD_INC(dev, TX_BAD_COOKIE);
+ 		b43_txstatus_dump(dev, status);
+ 		return NULL;
+ 	}
+ 	B43_WARN_ON(!ring->tx);
++
++	/* Retain the first suspicious input before baseline reclamation.
++	 * The legacy path below intentionally remains unchanged.
++	 */
++	if (b43_stall_diag_enabled) {
++		struct b43_stall_diag *d = &dev->stall_diag;
++		u32 reason = b43_sd_ownership_reason(ring->nr_slots,
++			ring->used_slots, ring->current_slot, slot,
++			status->mpdu_index ? 1 : status->mpdus);
++
++		if (reason) {
++			B43_SD_INC(dev, TX_INVALID_BOUNDS);
++			if (!d->first_ownership_reason) {
++				d->first_ownership_reason = reason;
++				d->first_ownership_j = jiffies;
++				d->first_ownership_ring = ring->index;
++				d->first_ownership_nr = ring->nr_slots;
++				d->first_ownership_used = ring->used_slots;
++				d->first_ownership_producer = ring->current_slot;
++				d->first_ownership_slot = slot;
++				d->first_ownership_mpdus = status->mpdus;
++				d->first_ownership_post = atomic_read(&d->count[B43_SD_TX_POST]);
++				d->first_ownership_complete = atomic_read(&d->count[B43_SD_TX_COMPLETE]);
++				memcpy(d->first_ownership_raw, status->raw,
++				       sizeof(d->first_ownership_raw));
++				b43warn(dev->wl,
++					"C5_SD_FIRST reason=%u j=%lu ring=%d nr=%d used=%d producer=%d slot=%d mpdus=%u raw=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
++					reason, d->first_ownership_j, ring->index,
++					ring->nr_slots, ring->used_slots,
++					ring->current_slot, slot, status->mpdus,
++					status->raw[0], status->raw[1],
++					status->raw[2], status->raw[3],
++					status->raw[4], status->raw[5],
++					status->raw[6], status->raw[7]);
++			}
++		}
++	}
+ 
+ 	/* Sanity check: TX packets are processed in-order on one ring.
+ 	 * Check if the slot deduced from the cookie really is the first
+@@ -1522,6 +1641,7 @@
+ 
+ 	skip = 0;
+ 	if (unlikely(slot != firstused)) {
++		B43_SD_INC(dev, TX_OUT_OF_ORDER);
+ 		/* This possibly is a firmware bug and will result in
+ 		 * malfunction, memory leaks and/or stall of DMA functionality.
+ 		 */
+@@ -1531,6 +1651,7 @@
+ 			 */
+ 			slot = firstused;
+ 			skip = 2;
++			B43_SD_INC(dev, TX_SKIP);
+ 			if (!err_out1) {
+ 				/* Report the error once. */
+ 				b43warn(dev->wl,
+@@ -1560,6 +1681,7 @@
+ 		ops->idx2desc(ring, slot, &meta);
+ 
+ 		if (b43_dma_ptr_is_poisoned(meta->skb)) {
++			B43_SD_INC(dev, TX_POISON);
+ 			b43warn(dev->wl, "Poisoned TX slot %d (first=%d) "
+ 			        "on ring %d\n",
+ 			        slot, firstused, ring->index);
+@@ -1622,7 +1744,21 @@
+ 				ring->nr_failed_tx_packets++;
+ 			ring->nr_total_packet_tries += status->frame_count;
+ #endif /* DEBUG */
+-			ieee80211_tx_status_skb(dev->wl->hw, meta->skb);
++			B43_SD_INC(dev, TX_COMPLETE);
++			if (b43_stall_diag_enabled)
++				dev->stall_diag.reclaimed[ring->index] = jiffies;
++			if (b43_defer_mac && dev->phy.type == B43_PHYTYPE_AC) {
++				struct b43_wl *wl = dev->wl;
++				u32 depth;
++
++				skb_queue_tail(&wl->defer_txstatus_queue, meta->skb);
++				atomic_inc(&wl->defer_tx_queued);
++				depth = skb_queue_len(&wl->defer_txstatus_queue);
++				if (depth > READ_ONCE(wl->defer_tx_peak))
++					WRITE_ONCE(wl->defer_tx_peak, depth);
++			} else {
++				ieee80211_tx_status_skb(dev->wl->hw, meta->skb);
++			}
+ 
+ 			/* skb will be freed by ieee80211_tx_status_skb().
+ 			 * Poison our pointer. */
+@@ -1661,6 +1797,7 @@
+ 	} else {
+ 		/* If the driver queue is running wake the corresponding
+ 		 * mac80211 queue. */
++		B43_SD_INC(dev, QUEUE_WAKE);
+ 		b43_wake_queue(dev, ring->queue_prio);
+ 		if (b43_debug(dev, B43_DBG_DMAVERBOSE)) {
+ 			b43dbg(dev->wl, "Woke up TX ring %d\n", ring->index);
+@@ -1692,7 +1829,52 @@
+ 	}
+ }
+ 
+-static void dma_rx(struct b43_dmaring *ring, int *slot)
++/*
++ * Upstream f38bf542: sync header/poison first, payload only after the
++ * existing dma_rx() bounds/replacement checks, then avoid the unmap's
++ * second full-buffer CPU invalidation. Default-off and AC-only here.
++ * These calls do not publish descriptors or alter their ownership.
++ */
++static bool b43_rx_short_sync(const struct b43_dmaring *ring)
++{
++	return b43_rx_sync_len && ring->dev->phy.type == B43_PHYTYPE_AC;
++}
++
++static void b43_rx_sync_header(struct b43_dmaring *ring, dma_addr_t addr)
++{
++	if (b43_rx_short_sync(ring)) {
++		sync_descbuffer_for_cpu(ring, addr,
++				       ring->frameoffset +
++				       sizeof(struct b43_plcp_hdr6) + 2);
++		atomic_inc(&ring->dev->wl->rxsync_headers);
++	} else {
++		sync_descbuffer_for_cpu(ring, addr, ring->rx_buffersize);
++	}
++}
++
++static void b43_rx_unmap_received(struct b43_dmaring *ring, dma_addr_t addr,
++				 unsigned int len)
++{
++	/* Caller has validated len+frameoffset and allocated the replacement. */
++	if (b43_rx_short_sync(ring)) {
++		sync_descbuffer_for_cpu(ring, addr, len + ring->frameoffset);
++		atomic_inc(&ring->dev->wl->rxsync_payloads);
++		if (ring->rx_pool) {
++			ring->dev->stall_diag.rx_pool.received++;
++		} else {
++			dma_unmap_single_attrs(ring->dev->dev->dma_dev, addr,
++				       ring->rx_buffersize, ring->rx_dma_dir,
++				       DMA_ATTR_SKIP_CPU_SYNC);
++			atomic_inc(&ring->dev->wl->rxsync_skips);
++		}
++		WRITE_ONCE(ring->dev->wl->rxsync_lastlen, len);
++	} else {
++		unmap_descbuffer(ring, addr, ring->rx_buffersize, 0);
++	}
++}
++
++static void dma_rx(struct b43_dmaring *ring, int *slot,
++		   struct list_head *rx_list)
+ {
+ 	const struct b43_dma_ops *ops = ring->ops;
+ 	struct b43_dmadesc_generic *desc;
+@@ -1702,10 +1884,26 @@
+ 	u16 len;
+ 	int err;
+ 	dma_addr_t dmaaddr;
+-
++	struct b43_dma_cost *cost = &ring->dev->stall_diag.dma_cost;
++	bool sample = b43_dma_cost_enabled &&
++		ring->dev->phy.type == B43_PHYTYPE_AC &&
++		b43_dma_cost_sample(cost);
++	u32 stamp = 0;
++
++	B43_SD_INC(ring->dev, RX_BUFFER);
++	if (sample) {
++		stamp = (u32)ktime_get_mono_fast_ns();
++		b43_dma_cost_note(cost, B43_DMA_COST_CLOCK,
++			stamp, (u32)ktime_get_mono_fast_ns());
++	}
+ 	desc = ops->idx2desc(ring, *slot, &meta);
+ 
+-	sync_descbuffer_for_cpu(ring, meta->dmaaddr, ring->rx_buffersize);
++	if (sample)
++		stamp = (u32)ktime_get_mono_fast_ns();
++	b43_rx_sync_header(ring, meta->dmaaddr);
++	if (sample)
++		b43_dma_cost_note(cost, B43_DMA_COST_HEADER,
++			stamp, (u32)ktime_get_mono_fast_ns());
+ 	skb = meta->skb;
+ 
+ 	rxhdr = (struct b43_rxhdr_fw4 *)skb->data;
+@@ -1716,14 +1914,18 @@
+ 		do {
+ 			udelay(2);
+ 			barrier();
++			if (b43_rx_short_sync(ring))
++				b43_rx_sync_header(ring, meta->dmaaddr);
+ 			len = le16_to_cpu(rxhdr->frame_len);
+ 		} while (len == 0 && i++ < 5);
+ 		if (unlikely(len == 0)) {
++			B43_SD_INC(ring->dev, RX_ZERO);
+ 			dmaaddr = meta->dmaaddr;
+ 			goto drop_recycle_buffer;
+ 		}
+ 	}
+ 	if (unlikely(b43_rx_buffer_is_poisoned(ring, skb))) {
++		B43_SD_INC(ring->dev, RX_POISON);
+ 		/* Something went wrong with the DMA.
+ 		 * The device did not touch the buffer and did not overwrite the poison. */
+ 		b43warn(ring->dev->wl, "DMA RX: Dropping poisoned buffer.\n");
+@@ -1731,6 +1933,7 @@
+ 		goto drop_recycle_buffer;
+ 	}
+ 	if (unlikely(len + ring->frameoffset > ring->rx_buffersize)) {
++		B43_SD_INC(ring->dev, RX_OVERSIZE);
+ 		/* The data did not fit into one descriptor buffer
+ 		 * and is split over multiple buffers.
+ 		 * This should never happen, as we try to allocate buffers
+@@ -1742,6 +1945,9 @@
+ 		while (1) {
+ 			desc = ops->idx2desc(ring, *slot, &meta);
+ 			/* recycle the descriptor buffer. */
++			if (ring->rx_dma_dir == DMA_BIDIRECTIONAL)
++				sync_descbuffer_for_cpu(ring, meta->dmaaddr,
++					 ring->frameoffset + sizeof(struct b43_plcp_hdr6) + 2);
+ 			b43_poison_rx_buffer(ring, meta->skb);
+ 			sync_descbuffer_for_device(ring, meta->dmaaddr,
+ 						   ring->rx_buffersize);
+@@ -1758,22 +1964,41 @@
+ 	}
+ 
+ 	dmaaddr = meta->dmaaddr;
+-	err = setup_rx_descbuffer(ring, desc, meta, GFP_ATOMIC);
++	if (sample)
++		stamp = (u32)ktime_get_mono_fast_ns();
++	err = setup_rx_descbuffer(ring, desc, meta, GFP_ATOMIC, sample);
++	if (sample)
++		b43_dma_cost_note(cost, B43_DMA_COST_REPLACE,
++			stamp, (u32)ktime_get_mono_fast_ns());
+ 	if (unlikely(err)) {
++		B43_SD_INC(ring->dev, RX_ALLOC_FAIL);
+ 		b43warn(ring->dev->wl, "DMA RX: setup_rx_descbuffer() failed\n");
+ 		goto drop_recycle_buffer;
+ 	}
+ 
+-	unmap_descbuffer(ring, dmaaddr, ring->rx_buffersize, 0);
++	if (sample)
++		stamp = (u32)ktime_get_mono_fast_ns();
++	b43_rx_unmap_received(ring, dmaaddr, len);
++	if (sample)
++		b43_dma_cost_note(cost, B43_DMA_COST_UNMAP,
++			stamp, (u32)ktime_get_mono_fast_ns());
+ 	skb_put(skb, len + ring->frameoffset);
+ 	skb_pull(skb, ring->frameoffset);
+ 
+-	b43_rx(ring->dev, skb, rxhdr);
++	if (sample)
++		stamp = (u32)ktime_get_mono_fast_ns();
++	b43_rx_list(ring->dev, skb, rxhdr, rx_list);
++	if (sample)
++		b43_dma_cost_note(cost, B43_DMA_COST_HANDOFF,
++			stamp, (u32)ktime_get_mono_fast_ns());
+ drop:
+ 	return;
+ 
+ drop_recycle_buffer:
+ 	/* Poison and recycle the RX buffer. */
++	if (ring->rx_dma_dir == DMA_BIDIRECTIONAL)
++		sync_descbuffer_for_cpu(ring, dmaaddr,
++			 ring->frameoffset + sizeof(struct b43_plcp_hdr6) + 2);
+ 	b43_poison_rx_buffer(ring, skb);
+ 	sync_descbuffer_for_device(ring, dmaaddr, ring->rx_buffersize);
+ }
+@@ -1783,19 +2008,99 @@
+ 	const struct b43_dma_ops *ops = ring->ops;
+ 	int slot, current_slot;
+ 	int used_slots = 0;
+-
++	bool capture_underrun = false;
++	struct b43_rx_flow_diag *d = &ring->dev->stall_diag.rx_flow;
++	bool batch = READ_ONCE(b43_rx_bh_batch) &&
++		     ring->dev->phy.type == B43_PHYTYPE_AC;
++	bool ip_batch = batch && READ_ONCE(b43_rx_ip_batch);
++	LIST_HEAD(rx_list);
++	bool observe = b43_stall_diag_enabled && b43_stall_hot_detail;
++	unsigned long begin = observe ? b43_service_clock() : 0;
++
++	if (observe)
++		b43_service_rx_begin(&ring->dev->stall_diag.service, begin);
+ 	B43_WARN_ON(ring->tx);
+ 	current_slot = ops->get_current_rxslot(ring);
+ 	B43_WARN_ON(!(current_slot >= 0 && current_slot < ring->nr_slots));
+ 
++	if (b43_stall_diag_enabled && d->underrun_pending &&
++	    !d->first_captured) {
++		d->first_captured = true;
++		d->underrun_pending = false;
++		capture_underrun = true;
++		d->pre_j = jiffies;
++		b43_service_first(&ring->dev->stall_diag.service,
++				  d->pre_j, d->pub_j);
++		d->pre_driver_next = ring->current_slot;
++		d->pre_hw_next = current_slot;
++		d->pre_nr = ring->nr_slots;
++		d->pre_pub_arg = d->pub_arg;
++		d->pre_pub_count = d->pub_count;
++		d->pre_rx_buffer = atomic_read(&ring->dev->stall_diag.count[B43_SD_RX_BUFFER]);
++		d->pre_handoff = atomic_read(&ring->dev->stall_diag.count[B43_SD_RX_HANDOFF]);
++	}
++
++	if (batch)
++		local_bh_disable();
+ 	slot = ring->current_slot;
+ 	for (; slot != current_slot; slot = next_slot(ring, slot)) {
+-		dma_rx(ring, &slot);
++		dma_rx(ring, &slot, ip_batch ? &rx_list : NULL);
+ 		update_max_used_slots(ring, ++used_slots);
++		if (batch && !(used_slots & 15) &&
++		    next_slot(ring, slot) != current_slot) {
++			unsigned long begin_ip = observe ? b43_service_clock() : 0;
++			unsigned long begin_bh;
++
++			if (ip_batch) {
++				netif_receive_skb_list(&rx_list);
++				if (observe)
++					b43_service_note(&ring->dev->stall_diag.service,
++							 B43_SERVICE_IP, begin_ip, b43_service_clock());
++			}
++			begin_bh = observe ? b43_service_clock() : 0;
++			local_bh_enable();
++			if (observe)
++				b43_service_note(&ring->dev->stall_diag.service,
++						 B43_SERVICE_BH, begin_bh, b43_service_clock());
++			local_bh_disable();
++		}
+ 	}
+ 	wmb();
+ 	b43_dma_rx_give(ring, slot);
++	if (b43_stall_diag_enabled)
++		ring->dev->stall_diag.rx_batch_max =
++			max_t(u32, ring->dev->stall_diag.rx_batch_max, used_slots);
++
+ 	ring->current_slot = slot;
++	if (capture_underrun) {
++		d->post_driver_next = slot;
++		d->post_calls = used_slots;
++		d->post_pub_arg = d->pub_arg;
++		d->post_pub_count = d->pub_count;
++		d->post_rx_buffer = atomic_read(&ring->dev->stall_diag.count[B43_SD_RX_BUFFER]);
++		d->post_handoff = atomic_read(&ring->dev->stall_diag.count[B43_SD_RX_HANDOFF]);
++		d->post_j = jiffies;
++		d->post_valid = true;
++	}
++	if (ip_batch) {
++		unsigned long begin_ip = observe ? b43_service_clock() : 0;
++
++		netif_receive_skb_list(&rx_list);
++		if (observe)
++			b43_service_note(&ring->dev->stall_diag.service,
++					 B43_SERVICE_IP, begin_ip, b43_service_clock());
++	}
++	if (batch) {
++		unsigned long begin_bh = observe ? b43_service_clock() : 0;
++
++		local_bh_enable();
++		if (observe)
++			b43_service_note(&ring->dev->stall_diag.service,
++					 B43_SERVICE_BH, begin_bh, b43_service_clock());
++	}
++	if (observe)
++		b43_service_note(&ring->dev->stall_diag.service,
++				 B43_SERVICE_RX, begin, b43_service_clock());
+ }
+ 
+ static void b43_dma_tx_suspend_ring(struct b43_dmaring *ring)
+--- a/main.c
++++ b/main.c
+@@ -91,6 +91,22 @@
+ static int modparam_hwpctl;
+ module_param_named(hwpctl, modparam_hwpctl, int, 0444);
+ MODULE_PARM_DESC(hwpctl, "Enable hardware-side power control (default off)");
++
++bool b43_rx_hw_amsdu_guard;
++module_param_named(rx_hw_amsdu_guard, b43_rx_hw_amsdu_guard, bool, 0444);
++MODULE_PARM_DESC(rx_hw_amsdu_guard, "AC trial: discard incomplete hardware A-MSDU records");
++
++bool b43_rx_sync_len;
++module_param_named(rx_sync_len, b43_rx_sync_len, bool, 0444);
++MODULE_PARM_DESC(rx_sync_len, "AC RAM trial: sync received RX bytes, skip duplicate unmap sync");
++
++bool b43_defer_splice;
++module_param_named(defer_splice, b43_defer_splice, bool, 0400);
++MODULE_PARM_DESC(defer_splice, "AC RAM trial: detach deferred queue once per IRQ delivery");
++
++bool b43_defer_mac;
++module_param_named(defer_mac, b43_defer_mac, bool, 0444);
++MODULE_PARM_DESC(defer_mac, "AC RAM trial: defer RX/TX status until after driver mutex");
+ 
+ static int modparam_nohwcrypt;
+ module_param_named(nohwcrypt, modparam_nohwcrypt, int, 0444);
+@@ -1683,6 +1699,12 @@
+ 		stat->raw[i] = w[i];
+ 		stat->raw[i + 4] = b43_read32(dev, reg[i]);
+ 	}
++	if (b43_stall_diag_enabled && !(stat->raw[4] & 1)) {
++		if (!atomic_read(&dev->stall_diag.count[B43_SD_TX_SECOND_INVALID]))
++			memcpy(dev->stall_diag.first_bad_status, stat->raw,
++			       sizeof(dev->stall_diag.first_bad_status));
++		B43_SD_INC(dev, TX_SECOND_INVALID);
++	}
+ 	stat->cookie = w[0] >> 16;
+ 	stat->acked = !!(w[0] & B43_TXST_AC_ACKED);
+ 	stat->intermediate = !!(w[0] & B43_TXST_AC_INTERMEDIATE);
+@@ -2636,6 +2658,7 @@
+ 	if (unlikely(b43_status(dev) != B43_STAT_STARTED))
+ 		return;
+ 
++	B43_SD_INC(dev, IRQ_THREAD);
+ 	reason = dev->irq_reason;
+ 	for (i = 0; i < ARRAY_SIZE(dma_reason); i++) {
+ 		dma_reason[i] = dev->dma_reason[i];
+@@ -2713,8 +2736,18 @@
+ 	 * Check the DMA reason registers for received data. An underrun is a
+ 	 * full ring, and reading it gives the buffers back.
+ 	 */
+-	if (dma_reason[0] & B43_DMAIRQ_RDESC_UFLOW)
++	if (dma_reason[0] & B43_DMAIRQ_RDESC_UFLOW) {
++		B43_SD_INC(dev, RX_UNDERRUN);
++		if (b43_stall_diag_enabled &&
++		    !dev->stall_diag.rx_flow.first_captured) {
++			dev->stall_diag.rx_flow.underrun_pending = true;
++			dev->stall_diag.rx_flow.reason = dma_reason[0];
++		}
++		if (b43_stall_diag_enabled)
++			b43_service_irq_freeze(&dev->stall_diag.service,
++					       b43_service_clock());
+ 		b43warn(dev->wl, "RX descriptor underrun\n");
++	}
+ 	if (dma_reason[0] & (B43_DMAIRQ_RX_DONE | B43_DMAIRQ_RDESC_UFLOW)) {
+ 		if (b43_using_pio_transfers(dev))
+ 			b43_pio_rx(dev->pio.rx_queue);
+@@ -2727,8 +2760,25 @@
+ 	B43_WARN_ON(dma_reason[4] & B43_DMAIRQ_RX_DONE);
+ 	B43_WARN_ON(dma_reason[5] & B43_DMAIRQ_RX_DONE);
+ 
+-	if (reason & B43_IRQ_TX_OK)
++	if (reason & B43_IRQ_TX_OK) {
++		bool observe = b43_stall_diag_enabled;
++		unsigned long begin = observe ? b43_service_clock() : 0;
++		u32 before = observe ?
++			atomic_read(&dev->stall_diag.count[B43_SD_TX_STATUS]) : 0;
++
+ 		handle_irq_transmit_status(dev);
++		if (observe) {
++			struct b43_service_diag *s = &dev->stall_diag.service;
++			u32 after;
++
++			b43_service_note(s, B43_SERVICE_TX, begin,
++					 b43_service_clock());
++			after = atomic_read(&dev->stall_diag.count[B43_SD_TX_STATUS]);
++			s->tx_entries = after - before;
++			if (s->tx_entries > s->max_tx_entries)
++				s->max_tx_entries = s->tx_entries;
++		}
++	}
+ 
+ 	/* Re-enable interrupts on the device by restoring the current interrupt mask. */
+ 	b43_write32(dev, B43_MMIO_GEN_IRQ_MASK, dev->irq_mask);
+@@ -2744,14 +2794,99 @@
+ #endif
+ }
+ 
++/*
++ * Adapted from upstream b91542b9 /72a9a3fb, with6ff5b6c1 RCU and
++ * e7250f5a purge followups. Only the AC trial parameter queues frames.
++ * free_irq()/SDIO synchronization completes this sole consumer before purge.
++ * No wl->mutex is held while mac80211 or the network stack runs here.
++ */
++#include "defer_splice.h"
++
++static void b43_deferred_mac_deliver(struct b43_wl *wl)
++{
++	struct sk_buff *skb;
++	struct sk_buff_head local_rx, local_tx;
++	struct sk_buff_head *rx = &wl->defer_rx_queue;
++	struct sk_buff_head *tx = &wl->defer_txstatus_queue;
++	unsigned int taken;
++	bool splice = b43_defer_splice;
++	LIST_HEAD(list);
++	u32 begin = 0, elapsed;
++
++	if (skb_queue_empty(&wl->defer_rx_queue) &&
++	    skb_queue_empty(&wl->defer_txstatus_queue))
++		return;
++	if (b43_stall_diag_enabled && b43_stall_hot_detail)
++		begin = (u32)b43_service_clock();
++	local_bh_disable();
++	if (splice) {
++		__skb_queue_head_init(&local_rx);
++		__skb_queue_head_init(&local_tx);
++		taken = b43_defer_take(tx, &local_tx);
++		if (taken) {
++			atomic_inc(&wl->defer_splice_batches[1]);
++			atomic_add(taken, &wl->defer_splice_frames[1]);
++		}
++		taken = b43_defer_take(rx, &local_rx);
++		if (taken) {
++			atomic_inc(&wl->defer_splice_batches[0]);
++			atomic_add(taken, &wl->defer_splice_frames[0]);
++		}
++		rx = &local_rx;
++		tx = &local_tx;
++	}
++	while ((skb = (splice ? __skb_dequeue(tx) : skb_dequeue(tx)))) {
++		ieee80211_tx_status_skb(wl->hw, skb);
++		atomic_inc(&wl->defer_tx_delivered);
++	}
++	rcu_read_lock();
++	while ((skb = (splice ? __skb_dequeue(rx) : skb_dequeue(rx)))) {
++		ieee80211_rx_list(wl->hw, NULL, skb, &list);
++		atomic_inc(&wl->defer_rx_delivered);
++	}
++	rcu_read_unlock();
++	netif_receive_skb_list(&list);
++	local_bh_enable();
++	if (b43_stall_diag_enabled && b43_stall_hot_detail) {
++		elapsed = (u32)b43_service_clock() - begin;
++		WRITE_ONCE(wl->defer_last_ticks, elapsed);
++		if (elapsed > READ_ONCE(wl->defer_max_ticks))
++			WRITE_ONCE(wl->defer_max_ticks, elapsed);
++	}
++}
++
+ /* Interrupt thread handler. Handles device interrupts in thread context. */
+ static irqreturn_t b43_interrupt_thread_handler(int irq, void *dev_id)
+ {
+ 	struct b43_wldev *dev = dev_id;
++	bool observe = b43_stall_diag_enabled;
++	unsigned long before = observe ? b43_service_clock() : 0;
++	unsigned long begin = 0;
+ 
+ 	mutex_lock(&dev->wl->mutex);
++	if (observe) {
++		struct b43_service_diag *s = &dev->stall_diag.service;
++
++		begin = b43_service_clock();
++		b43_service_irq_begin(s, READ_ONCE(s->hardirq_clock),
++				      (u32)before, (u32)begin,
++				      dev->irq_reason, dev->dma_reason[0]);
++		s->irqs_since_rx++;
++		b43_service_note(s, B43_SERVICE_LOCK, before, begin);
++		s->handoff = (u32)((u32)begin - READ_ONCE(s->hardirq_clock));
++		if (s->handoff > s->max_handoff)
++			s->max_handoff = s->handoff;
++	}
+ 	b43_do_interrupt_thread(dev);
++	if (observe) {
++		u32 end = b43_service_clock();
++
++		b43_service_note(&dev->stall_diag.service, B43_SERVICE_IRQ,
++				 begin, end);
++		b43_service_irq_end(&dev->stall_diag.service, end);
++	}
+ 	mutex_unlock(&dev->wl->mutex);
++	b43_deferred_mac_deliver(dev->wl);
+ 
+ 	return IRQ_HANDLED;
+ }
+@@ -2800,6 +2935,9 @@
+ 	b43_write32(dev, B43_MMIO_GEN_IRQ_MASK, 0);
+ 	/* Save the reason bitmasks for the IRQ thread handler. */
+ 	dev->irq_reason = reason;
++	if (b43_stall_diag_enabled)
++		WRITE_ONCE(dev->stall_diag.service.hardirq_clock,
++			   b43_service_clock());
+ 
+ 	return IRQ_WAKE_THREAD;
+ }
+@@ -2833,6 +2971,7 @@
+ 		b43_do_interrupt_thread(dev);
+ 
+ 	mutex_unlock(&wl->mutex);
++	b43_deferred_mac_deliver(wl);
+ }
+ 
+ void b43_do_release_fw(struct b43_firmware_file *fw)
+@@ -5735,6 +5874,9 @@
+ 		}
+ 	}
+ 
++	skb_queue_purge(&wl->defer_rx_queue);
++	ieee80211_purge_tx_queue(wl->hw, &wl->defer_txstatus_queue);
++
+ 	b43_mac_suspend(dev);
+ 	b43_leds_exit(dev);
+ 	b43dbg(wl, "Wireless interface stopped\n");
+@@ -6725,6 +6867,42 @@
+  * its own making (frame code 0x25, at 0x076C on 784), from no table a
+  * driver fills; mac80211 reorders.
+  */
++static void b43_sd_ba_observe(struct b43_wl *wl,
++			      const struct ieee80211_ampdu_params *p)
++{
++	struct b43_wldev *dev;
++
++	if (!b43_stall_diag_enabled || !mutex_trylock(&wl->mutex))
++		return;
++	dev = wl->current_dev;
++	if (!dev)
++		goto out;
++	switch (p->action) {
++	case IEEE80211_AMPDU_RX_START:
++		B43_SD_INC(dev, BA_RX_START);
++		break;
++	case IEEE80211_AMPDU_RX_STOP:
++		B43_SD_INC(dev, BA_RX_STOP);
++		break;
++	case IEEE80211_AMPDU_TX_OPERATIONAL:
++		B43_SD_INC(dev, BA_TX_OPERATIONAL);
++		if (p->tid < 16)
++			atomic_set(&dev->stall_diag.ba_win[p->tid], p->buf_size);
++		break;
++	case IEEE80211_AMPDU_TX_STOP_CONT:
++	case IEEE80211_AMPDU_TX_STOP_FLUSH:
++	case IEEE80211_AMPDU_TX_STOP_FLUSH_CONT:
++		B43_SD_INC(dev, BA_TX_STOP);
++		if (p->tid < 16)
++			atomic_set(&dev->stall_diag.ba_win[p->tid], 0);
++		break;
++	default:
++		break;
++	}
++out:
++	mutex_unlock(&wl->mutex);
++}
++
+ static int b43_op_ampdu_action(struct ieee80211_hw *hw,
+ 			       struct ieee80211_vif *vif,
+ 			       struct ieee80211_ampdu_params *params)
+@@ -6733,6 +6911,8 @@
+ 	struct b43_sta *bsta = (struct b43_sta *)params->sta->drv_priv;
+ 	struct b43_wldev *dev;
+ 	bool ok;
++
++	b43_sd_ba_observe(wl, params);
+ 
+ 	switch (params->action) {
+ 	case IEEE80211_AMPDU_TX_START:
+@@ -7223,6 +7403,7 @@
+ 	 * See comment in b43_remove(). */
+ 
+ 	wldev = b43_bus_get_wldev(dev);
++	b43_stall_diag_unregister(wldev);
+ 	b43_debugfs_remove_device(wldev);
+ 	b43_wireless_core_detach(wldev);
+ 	list_del(&wldev->list);
+@@ -7257,6 +7438,8 @@
+ 
+ 	b43_bus_set_wldev(dev, wldev);
+ 	b43_debugfs_add_device(wldev);
++	if (b43_stall_diag_register(wldev))
++		b43warn(wl, "Stall diagnostics unavailable\n");
+ 
+       out:
+ 	return err;
+@@ -7355,6 +7538,19 @@
+ 	INIT_WORK(&wl->beacon_update_trigger, b43_beacon_update_trigger_work);
+ 	INIT_WORK(&wl->txpower_adjust_work, b43_phy_txpower_adjust_work);
+ 	INIT_WORK(&wl->tx_work, b43_tx_work);
++	skb_queue_head_init(&wl->defer_rx_queue);
++	skb_queue_head_init(&wl->defer_txstatus_queue);
++	atomic_set(&wl->defer_splice_batches[0], 0);
++	atomic_set(&wl->defer_splice_batches[1], 0);
++	atomic_set(&wl->defer_splice_frames[0], 0);
++	atomic_set(&wl->defer_splice_frames[1], 0);
++	atomic_set(&wl->defer_rx_queued, 0);
++	atomic_set(&wl->defer_rx_delivered, 0);
++	atomic_set(&wl->defer_tx_queued, 0);
++	atomic_set(&wl->defer_tx_delivered, 0);
++	atomic_set(&wl->rxsync_headers, 0);
++	atomic_set(&wl->rxsync_payloads, 0);
++	atomic_set(&wl->rxsync_skips, 0);
+ 
+ 	/* Initialize queues and flags. */
+ 	for (queue_num = 0; queue_num < B43_QOS_QUEUE_NUM; queue_num++) {
+--- /dev/null
++++ b/service_diag.h
+@@ -0,0 +1,153 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_SERVICE_DIAG_H_
++#define B43_SERVICE_DIAG_H_
++
++#include <linux/types.h>
++#include <linux/timekeeping.h>
++
++/* Metadata only. Callers hold wl->mutex, except the single READ/WRITE_ONCE
++ * hardirq_clock word. No ring/descriptor/MMIO access, allocations or policy.
++ * Durations use modulo-2^32 units of 1024ns, not host timestamps.
++ */
++enum b43_service_id {
++	B43_SERVICE_RX, B43_SERVICE_TX, B43_SERVICE_IP,
++	B43_SERVICE_BH, B43_SERVICE_LOCK, B43_SERVICE_IRQ,
++	B43_SERVICE_COUNT
++};
++
++struct b43_service_span {
++	u32 last, max;
++	unsigned long end;
++};
++
++#define B43_IRQ_HISTORY 8
++
++struct b43_irq_event {
++	u32 hard, lock, thread, rx_begin, rx_end, end, reason, dma0;
++};
++
++struct b43_service_diag {
++	struct b43_service_span span[B43_SERVICE_COUNT];
++	struct b43_service_span first_span[B43_SERVICE_COUNT];
++	u32 hardirq_clock, handoff, max_handoff;
++	u32 rx_gap, max_rx_gap, tx_entries, max_tx_entries;
++	u32 first_pub_gap, first_rx_gap, first_handoff, first_tx_entries;
++	u32 irqs_since_rx, rx_gap_irqs, first_rx_gap_irqs;
++	unsigned long first_j;
++	bool rx_seen, first_seen;
++	struct b43_irq_event history[B43_IRQ_HISTORY];
++	struct b43_irq_event frozen_history[B43_IRQ_HISTORY];
++	struct b43_irq_event active_irq, frozen_active_irq;
++	u32 history_next, history_count, frozen_next, frozen_count;
++	u32 freeze_clock, freeze_rx_end;
++	bool irq_active, history_frozen, frozen_irq_active;
++
++};
++
++/* IRQ-safe cached clock; low bits wrap after about 73 minutes. */
++static inline u32 b43_service_clock(void)
++{
++	return (u32)(ktime_get_mono_fast_ns() >> 10);
++}
++
++static inline void b43_service_note(struct b43_service_diag *s,
++				    enum b43_service_id id,
++				    unsigned long begin, unsigned long end)
++{
++	struct b43_service_span *p;
++	u32 elapsed = (u32)(end - begin);
++
++	if ((unsigned int)id >= B43_SERVICE_COUNT)
++		return;
++	p = &s->span[id];
++	p->last = elapsed;
++	if (elapsed > p->max)
++		p->max = elapsed;
++	p->end = end;
++	if (id == B43_SERVICE_RX) {
++		s->rx_seen = true;
++		if (s->irq_active)
++			s->active_irq.rx_end = (u32)end;
++	}
++}
++
++static inline void b43_service_rx_begin(struct b43_service_diag *s,
++					unsigned long now)
++{
++	if (s->irq_active)
++		s->active_irq.rx_begin = (u32)now;
++	s->rx_gap_irqs = s->irqs_since_rx;
++	s->irqs_since_rx = 0;
++	s->rx_gap = s->rx_seen ?
++		(u32)(now - s->span[B43_SERVICE_RX].end) : 0;
++	if (s->rx_gap > s->max_rx_gap)
++		s->max_rx_gap = s->rx_gap;
++}
++
++/* All history fields are protected by the existing wl->mutex.
++ * The hard IRQ timestamp is copied from the existing READ_ONCE word.
++ * No added MMIO, descriptor access, allocations, waits, or packet logging.
++ */
++static inline void b43_service_irq_begin(struct b43_service_diag *s,
++					u32 hard, u32 lock, u32 thread,
++					u32 reason, u32 dma0)
++{
++	s->active_irq = (struct b43_irq_event) {
++		.hard = hard, .lock = lock, .thread = thread,
++		.reason = reason, .dma0 = dma0,
++	};
++	s->irq_active = true;
++}
++
++static inline void b43_service_irq_end(struct b43_service_diag *s, u32 end)
++{
++	if (!s->irq_active)
++		return;
++	s->active_irq.end = end;
++	s->history[s->history_next] = s->active_irq;
++	s->history_next = (s->history_next + 1) % B43_IRQ_HISTORY;
++	if (s->history_count < B43_IRQ_HISTORY)
++		s->history_count++;
++	s->irq_active = false;
++}
++
++/* Freeze BEFORE warning output and RX handling. The active event is
++ * incomplete by definition; end=0 and rx_begin=0 must not mean a duration.
++ */
++static inline void b43_service_irq_freeze(struct b43_service_diag *s, u32 now)
++{
++	unsigned int i;
++
++	if (s->history_frozen)
++		return;
++	s->freeze_clock = now;
++	s->freeze_rx_end = (u32)s->span[B43_SERVICE_RX].end;
++	s->frozen_next = s->history_next;
++	s->frozen_count = s->history_count;
++	for (i = 0; i < B43_IRQ_HISTORY; i++)
++		s->frozen_history[i] = s->history[i];
++	s->frozen_irq_active = s->irq_active;
++	s->frozen_active_irq = s->irq_active ? s->active_irq :
++		(struct b43_irq_event) { 0 };
++	s->history_frozen = true;
++}
++
++static inline void b43_service_first(struct b43_service_diag *s,
++				     unsigned long now, unsigned long pub_j)
++{
++	unsigned int i;
++
++	if (s->first_seen)
++		return;
++	s->first_seen = true;
++	s->first_j = now;
++	s->first_pub_gap = (u32)(now - pub_j);
++	s->first_rx_gap = s->rx_gap;
++	s->first_handoff = s->handoff;
++	s->first_rx_gap_irqs = s->rx_gap_irqs;
++	s->first_tx_entries = s->tx_entries;
++	for (i = 0; i < B43_SERVICE_COUNT; i++)
++		s->first_span[i] = s->span[i];
++}
++
++#endif /* B43_SERVICE_DIAG_H_ */
+--- /dev/null
++++ b/dma_cost.h
+@@ -0,0 +1,45 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_DMA_COST_H_
++#define B43_DMA_COST_H_
++#include <linux/types.h>
++/* All updates and snapshots are under the existing wl->mutex. No MMIO,
++ * descriptors, allocations, packet bytes or policy decisions are examined.
++ * Fixed systematic sample: every128th RX invocation, at most16384 packets.
++ * Durations are elapsed nanoseconds (include preemption), modulo2^32.
++ * Nested REPLACE includes ALLOC and MAP: never sum these overlapping spans.
++ */
++#define B43_DMA_COST_DIVISOR 128U
++#define B43_DMA_COST_LIMIT 16384U
++enum b43_dma_cost_id {
++ B43_DMA_COST_HEADER, B43_DMA_COST_ALLOC, B43_DMA_COST_MAP,
++ B43_DMA_COST_REPLACE, B43_DMA_COST_UNMAP, B43_DMA_COST_HANDOFF,
++ B43_DMA_COST_CLOCK, B43_DMA_COST_COUNT
++};
++struct b43_dma_cost_span { u64 ns; u32 calls, max_ns; };
++struct b43_dma_cost {
++ u32 rx_calls, sampled;
++ struct b43_dma_cost_span span[B43_DMA_COST_COUNT];
++};
++static inline bool b43_dma_cost_sample(struct b43_dma_cost *s)
++{
++ s->rx_calls++;
++ if ((s->rx_calls & (B43_DMA_COST_DIVISOR - 1)) ||
++     s->sampled >= B43_DMA_COST_LIMIT)
++  return false;
++ s->sampled++;
++ return true;
++}
++static inline void b43_dma_cost_note(struct b43_dma_cost *s,
++                                    unsigned int id, u32 begin, u32 end)
++{
++ struct b43_dma_cost_span *p;
++ u32 elapsed = end - begin;
++ if (id >= B43_DMA_COST_COUNT)
++  return;
++ p = &s->span[id];
++ p->calls++;
++ p->ns += elapsed;
++ if (elapsed > p->max_ns)
++  p->max_ns = elapsed;
++}
++#endif
+--- /dev/null
++++ b/rx_hw_amsdu_diag.h
+@@ -0,0 +1,49 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* Upstream247b2fc4 policy, scoped to AC and opt-in for matched RAM tests.
++ * This hardware RX-status bit denotes an incomplete hardware deaggregation
++ * record; it is distinct from the QoS A-MSDU bit of an on-air complete MPDU.
++ */
++static inline bool b43_hw_amsdu_should_drop(bool ac, bool enabled, u32 macstat)
++{
++	return ac && enabled && (macstat & B43_RX_MAC_AMSDU);
++}
++
++/* Existing wl->mutex protects these bounded counters/header snapshots.
++ * Bytes are observed only for the same own-data scope as the boundary
++ * observer. No allocation, MMIO, key lookup, payload storage or mutation.
++ * PN bytes are header metadata, not a cryptographic-verification result.
++ */
++static inline void b43_hw_amsdu_observe(struct b43_rxb_diag *d, const u8 *p,
++				      unsigned int n, u32 macstat, u32 at,
++				      bool target)
++{
++	struct b43_rxb_sample sample = {
++		.at = at,
++		.macstat = macstat,
++		.tid = 255,
++		.class = B43_RXB_SHORT,
++	};
++	unsigned int offset, slot;
++	u16 fc;
++
++	if (!(macstat & B43_RX_MAC_AMSDU))
++		return;
++	d->hw_amsdu_seen++;
++	if (!target)
++		return;
++	offset = sizeof(struct b43_plcp_hdr6) +
++		 ((macstat & B43_RX_MAC_PADDING) ? 2 : 0);
++	if (n < offset + 2)
++		return;
++	p += offset;
++	n -= offset;
++	fc = p[0] | ((u16)p[1] << 8);
++	sample.length = min_t(unsigned int, n, 65535);
++	b43_rxb_parse(&sample, p, n, ieee80211_hdrlen(cpu_to_le16(fc)),
++		      !!(macstat & B43_RX_MAC_DEC));
++	slot = sample.tid == 0 ? 0 : 1;
++	if (!d->hw_amsdu_valid[slot]) {
++		d->hw_amsdu_first[slot] = sample;
++		d->hw_amsdu_valid[slot] = true;
++	}
++}
+--- a/dma.h
++++ b/dma.h
+@@ -3,6 +3,7 @@
+ #define B43_DMA_H_
+ 
+ #include <linux/err.h>
++#include <linux/dma-direction.h>
+ 
+ #include "b43.h"
+ 
+@@ -203,6 +204,7 @@
+ };
+ 
+ struct b43_dmaring;
++struct page_pool;
+ 
+ /* Lowlevel DMA operations that differ between 32bit and 64bit DMA. */
+ struct b43_dma_ops {
+@@ -260,6 +262,9 @@
+ 	u32 frameoffset;
+ 	/* Descriptor buffer size. */
+ 	u16 rx_buffersize;
++	enum dma_data_direction rx_dma_dir;
++	struct page_pool *rx_pool;
++	unsigned int rx_pool_order, rx_pool_bytes;
+ 	/* The MMIO base register of the DMA controller. */
+ 	u16 mmio_base;
+ 	/* DMA controller index number (0-5). */
+--- /dev/null
++++ b/rx_pool_diag.h
+@@ -0,0 +1,10 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_RX_POOL_DIAG_H
++#define B43_RX_POOL_DIAG_H
++#define B43_RX_POOL_MAX_PAGES 1024U
++struct b43_rx_pool_diag {
++ u32 allocated, prepared, received, alloc_fail, build_fail, bad_addr;
++ u32 cap_fail, released;
++};
++extern bool b43_rx_pool;
++#endif
+--- a/xmit.h
++++ b/xmit.h
+@@ -448,6 +448,8 @@
+ 			   const u16 octets, const u8 bitrate);
+ 
+ void b43_rx(struct b43_wldev *dev, struct sk_buff *skb, const void *_rxhdr);
++void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
++		 const void *_rxhdr, struct list_head *rx_list);
+ 
+ void b43_txstatus_dump(struct b43_wldev *dev,
+ 		       const struct b43_txstatus *status);
+--- /dev/null
++++ b/rx_pool_impl.h
+@@ -0,0 +1,118 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++#ifndef B43_RX_POOL_IMPL_H
++#define B43_RX_POOL_IMPL_H
++/* RX allocator is serialized by the existing wl->mutex; initial fill occurs
++ * before IRQ registration. No direct recycling: skb frees may run elsewhere.
++ * Page-pool owns mappings through last skb reference and deferred destruction.
++ * Driver explicitly syncs CPU header before poison, then the FULL advertised
++ * RX region for device before posting. Pool flags deliberately omit SYNC_DEV:
++ * the driver performs this ownership transition after its poison writes.
++ */
++static int b43_pool_create(struct b43_dmaring *ring)
++{
++ struct page_pool_params p = { 0 };
++ struct page_pool *pool;
++ unsigned int size;
++ if (!b43_rx_pool || ring->tx || ring->dev->phy.type != B43_PHYTYPE_AC)
++  return 0;
++ if (ring->type != B43_DMA_64BIT || ring->index != 0 ||
++     ring->rx_dma_dir != DMA_BIDIRECTIONAL || !b43_rx_sync_len)
++  return -EINVAL;
++ size = SKB_DATA_ALIGN(NET_SKB_PAD + ring->rx_buffersize) +
++        SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
++ ring->rx_pool_order = get_order(size);
++ if (ring->rx_pool_order > 1)
++  return -E2BIG;
++ ring->rx_pool_bytes = PAGE_SIZE << ring->rx_pool_order;
++ p.order = ring->rx_pool_order;
++ p.pool_size = ring->nr_slots;
++ p.nid = NUMA_NO_NODE;
++ p.dev = ring->dev->dev->dma_dev;
++ p.dma_dir = DMA_BIDIRECTIONAL;
++ p.offset = NET_SKB_PAD;
++ p.max_len = ring->rx_buffersize;
++ p.flags = PP_FLAG_DMA_MAP;
++ pool = page_pool_create(&p);
++ if (IS_ERR(pool))
++  return PTR_ERR(pool);
++ ring->rx_pool = pool;
++ return 0;
++}
++static int b43_pool_setup(struct b43_dmaring *ring,
++                          struct b43_dmadesc_generic *desc,
++                          struct b43_dmadesc_meta *meta, gfp_t gfp,
++                          bool sample)
++{
++ struct b43_rx_pool_diag *d = &ring->dev->stall_diag.rx_pool;
++ struct b43_dma_cost *cost = &ring->dev->stall_diag.dma_cost;
++ struct page_pool *pool = ring->rx_pool;
++ struct page *page;
++ struct sk_buff *skb;
++ dma_addr_t base, dmaaddr;
++ u32 stamp = 0, mapped;
++ /* Order1 slow allocation creates one page at a time. Fail closed at8MiB
++  * mapped pool storage; no unbounded fallback allocation or silent mode swap.
++  */
++ mapped = pool->pages_state_hold_cnt -
++          (u32)atomic_read(&pool->pages_state_release_cnt);
++ if (mapped >= B43_RX_POOL_MAX_PAGES) {
++  d->cap_fail++;
++  return -ENOMEM;
++ }
++ if (sample)
++  stamp = (u32)ktime_get_mono_fast_ns();
++ page = page_pool_alloc_pages(pool, gfp);
++ if (unlikely(!page)) {
++  d->alloc_fail++;
++  return -ENOMEM;
++ }
++ skb = build_skb(page_address(page), ring->rx_pool_bytes);
++ if (unlikely(!skb)) {
++  d->build_fail++;
++  page_pool_put_full_page(pool, page, false);
++  return -ENOMEM;
++ }
++ skb_mark_for_recycle(skb);
++ skb_reserve(skb, NET_SKB_PAD);
++ if (sample)
++  b43_dma_cost_note(cost, B43_DMA_COST_ALLOC,
++                   stamp, (u32)ktime_get_mono_fast_ns());
++ base = page_pool_get_dma_addr(page);
++ dmaaddr = base + NET_SKB_PAD;
++ /* Do not call the legacy error helper: it would unmap pool-owned pages.
++  * Pool already checked DMA mapping errors. Only AC DMA64 is admitted above.
++  */
++ if (unlikely((u64)dmaaddr < (u64)base ||
++              (u64)dmaaddr + ring->rx_buffersize < (u64)dmaaddr)) {
++  d->bad_addr++;
++  dev_kfree_skb_any(skb);
++  return -EIO;
++ }
++ if (sample)
++  stamp = (u32)ktime_get_mono_fast_ns();
++ sync_descbuffer_for_cpu(ring, dmaaddr,
++                         ring->frameoffset + sizeof(struct b43_plcp_hdr6) + 2);
++ b43_poison_rx_buffer(ring, skb);
++ sync_descbuffer_for_device(ring, dmaaddr, ring->rx_buffersize);
++ if (sample)
++  b43_dma_cost_note(cost, B43_DMA_COST_MAP,
++                   stamp, (u32)ktime_get_mono_fast_ns());
++ /* MAP timing now means pool prepare CPU/device sync, not a new map API.
++  * Publish meta only after every fallible operation and ownership sync.
++  */
++ meta->skb = skb;
++ meta->dmaaddr = dmaaddr;
++ ring->ops->fill_descriptor(ring, desc, dmaaddr,
++                            ring->rx_buffersize, 0, 0, 0);
++ d->allocated++;
++ d->prepared++;
++ return 0;
++}
++static void b43_pool_destroy(struct b43_dmaring *ring)
++{
++ if (ring->rx_pool) {
++  page_pool_destroy(ring->rx_pool);
++  ring->rx_pool = NULL;
++ }
++}
++#endif
+--- /dev/null
++++ b/rx_diag_class.h
+@@ -0,0 +1,38 @@
++/* SPDX-License-Identifier: GPL-2.0-or-later */
++/* Header-only diagnostic classification. No policy or payload access. */
++#ifndef B43_RX_DIAG_CLASS_H
++#define B43_RX_DIAG_CLASS_H
++#ifdef B43_RX_DIAG_NATIVE
++#include <stdint.h>
++typedef uint8_t u8;
++typedef uint16_t u16;
++#else
++#include <linux/types.h>
++#endif
++#define B43_RXD_BEACON 1U
++#define B43_RXD_OWN_DATA 2U
++#define B43_RXD_GROUP_DATA 4U
++#define B43_RXD_OTHER_DATA 8U
++#define B43_RXD_PROTECTED 16U
++static inline unsigned int b43_rx_diag_classify(const u8 *frame,
++                                               unsigned int length,
++                                               const u8 *own)
++{
++ unsigned int i, own_match = 1, result = 0;
++ u16 fc;
++ if (length < 10)
++  return 0;
++ fc = (u16)frame[0] | ((u16)frame[1] << 8);
++ if ((fc & 0x00fc) == 0x0080)
++  result |= B43_RXD_BEACON;
++ if ((fc & 0x000c) != 0x0008)
++  return result;
++ if (fc & 0x4000)
++  result |= B43_RXD_PROTECTED;
++ if (frame[4] & 1)
++  return result | B43_RXD_GROUP_DATA;
++ for (i = 0; i < 6; i++)
++  own_match &= frame[4+i] == own[i];
++ return result | (own_match ? B43_RXD_OWN_DATA : B43_RXD_OTHER_DATA);
++}
++#endif

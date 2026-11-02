@@ -1,0 +1,28 @@
+--- a/drivers/net/wireless/broadcom/b43/phy_ac.c
++++ b/drivers/net/wireless/broadcom/b43/phy_ac.c
+@@ -47,9 +47,25 @@
+ 
+ /* Basic PHY ops */
+ 
++struct b43_phy_ac_fem;
++static const struct b43_phy_ac_fem *b43_phy_ac_fem_lookup(struct b43_wldev *dev);
++
+ static int b43_phy_ac_op_allocate(struct b43_wldev *dev)
+ {
+ 	struct b43_phy_ac *phy_ac;
++
++	/*
++	 * Refuse an unverified frontend before AC analog/radio callbacks can
++	 * run. Skipping only its table later in op_init still allows the rest
++	 * of the bring-up with an unknown PA and antenna-switch mapping.
++	 */
++	if (!b43_phy_ac_fem_lookup(dev)) {
++		b43err(dev->wl,
++		       "AC-PHY: refusing unsupported frontend femctrl=%u sub=%u\n",
++		       dev->dev->bus_sprom->femctrl,
++		       dev->dev->bus_sprom->boardflags3 & 0x7);
++		return -EOPNOTSUPP;
++	}
+ 
+ 	phy_ac = kzalloc(sizeof(*phy_ac), GFP_KERNEL);
+ 	if (!phy_ac)

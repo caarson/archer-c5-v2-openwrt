@@ -1,0 +1,77 @@
+--- a/drivers/net/wireless/broadcom/b43/phy_ac.c
++++ b/drivers/net/wireless/broadcom/b43/phy_ac.c
+@@ -3143,6 +3143,38 @@
+ };
+ 
+ /*
++ * Frontend 3/sub0, 5 GHz: the R7000 BCM4360 MMIO capture writes these
++ * three rows twice, at PHY table 0x0a offsets 0, 0x20 and 0x40
++ * (router-data/r7000/mmio-cold-5g36-80.zip, ops #7045-7153 and
++ * #27962-28070, upstream 7ae3a61e61f2).
++ * Independently, all 96 bytes match the three 32-byte .rodata objects
++ * at offsets 0x2ab34/0x2ab54/0x2ab74 in TP-Link's Archer C5 v2 wl
++ * 6.37.14.93 (module SHA256 ddc9f9f894d775a54fc1e8023fdc65b3e
++ * db83819be226b66d479a38632d63bf7). The Archer has two chains.
++ * This is an experimental port; on-air Archer validation is pending.
++ */
++static const u8 b43_phy_ac_fem3_sub0_c0[32] = {
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x02, 0x0c, 0x03, 0x0b, 0x02, 0x0c, 0x03, 0x0b,
++	0x02, 0x2c, 0x03, 0x2d, 0x02, 0x2c, 0x03, 0x2d,
++};
++
++static const u8 b43_phy_ac_fem3_sub0_c1[32] = {
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x02, 0x09, 0x06, 0x0e, 0x02, 0x09, 0x06, 0x0e,
++	0x02, 0x29, 0x06, 0x2d, 0x02, 0x29, 0x06, 0x2d,
++};
++
++static const u8 b43_phy_ac_fem3_sub0_c2[32] = {
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++	0x04, 0x09, 0x06, 0x0e, 0x04, 0x09, 0x06, 0x0e,
++	0x04, 0x29, 0x06, 0x2b, 0x04, 0x29, 0x06, 0x2b,
++};
++
++/*
+  * What a board writes inside the table-write gate before its FEM table
+  * (@pre) and after it (@setup).
+  */
+@@ -3173,7 +3205,24 @@
+ 	b43_phy_ac_chipctl_set(dev, 0x00000008);
+ }
+ 
++/*
++ * The 6.37 frontend-3 selector clears PHY 0x040a[8], sets regctl0[2],
++ * and sets the chipcontrol frontend pins to 0x10 before table writes.
++ * The R7000 5 GHz capture confirms regctl0=0x00200004 and chipcontrol
++ * 0x10 around the table; preserve chipcontrol bits outside the mask.
++ */
++static void b43_phy_ac_fem3_sub0_pre(struct b43_wldev *dev)
++{
++	struct bcma_drv_cc *cc = &dev->dev->bdev->bus->drv_cc;
++
++	b43_phy_mask(dev, 0x040a, (u16)~0x0100);
++	bcma_chipco_regctl_maskset(cc, 0, ~0x00000004U, 0x00000004U);
++	bcma_cc_maskset32(cc, BCMA_CC_CHIPCTL, ~0x00fffffdU, 0x00000010U);
++}
++
+ static const struct b43_phy_ac_fem b43_phy_ac_fems[] = {
++	{ 3, 0, { b43_phy_ac_fem3_sub0_c0, b43_phy_ac_fem3_sub0_c1,
++		  b43_phy_ac_fem3_sub0_c2 }, b43_phy_ac_fem3_sub0_pre, NULL },
+ 	{ 6, 0, { b43_phy_ac_fem_femctrl6, b43_phy_ac_fem_femctrl6,
+ 		  b43_phy_ac_fem_femctrl6 }, NULL, NULL },
+ 	{ 2, 1, { b43_phy_ac_fem_fem5516_fc1, b43_phy_ac_fem_x29c_c1_fc2_sub1,
+@@ -3187,6 +3236,10 @@
+ 	struct ssb_sprom *sprom = dev->dev->bus_sprom;
+ 	u8 sub = sprom->boardflags3 & B43_BFL3_FEMCTRL_SUB;
+ 	unsigned int i;
++
++	if (sprom->femctrl == 3 && (sprom->ant_available_bg ||
++					 !sprom->ant_available_a))
++		return NULL;
+ 
+ 	for (i = 0; i < ARRAY_SIZE(b43_phy_ac_fems); i++)
+ 		if (b43_phy_ac_fems[i].femctrl == sprom->femctrl &&

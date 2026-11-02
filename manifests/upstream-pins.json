@@ -1,0 +1,67 @@
+{
+  "openwrt": {
+    "repository": "https://github.com/openwrt/openwrt",
+    "commit": "64900e756efa667774214f9c6b17c113222e01f7",
+    "release": "25.12.6"
+  },
+  "b43_ac": {
+    "repository": "https://github.com/aleferri/b43-ac-wip",
+    "commit": "7ae3a61e61f2cc7b7e84f5bba3918401ea46816e",
+    "archive_sha256": "1b162bdcdd3a5a085fd97e85b4fd2509fe8428af83c3964a3bedb9e111cdbebb"
+  },
+  "backports": "6.18.55",
+  "kernel": "6.12.112",
+  "installed_b43_sha256": "9c3a794391d13c458e55a34b61ce837be0c6a0d04d83fa8907c4ee0a05646d81",
+  "installed_mac80211_sha256": "163ff394d48bd61adc9f62b69fa839531d0a2579a0a69b0c69ada63ae794f3ce",
+  "firmware": {
+    "url": "https://distfiles-cdn.gentoo.org/distfiles/c5/broadcom-wl-6.30.163.46.tar.bz2",
+    "archive_sha256": "a07c3b6b277833c7dbe61daa511f908cd66c5e2763eb7a0859abc36cd9335c2d",
+    "hash_from": "production OpenWrt package/kernel/mac80211/broadcom.mk",
+    "files": [
+      {
+        "name": "ucode42.fw",
+        "bytes": 40024,
+        "sha256": "ab977428a2f62f36ed986851ebead1cd50aa0186ca11f91d7b6886683c70d269"
+      },
+      {
+        "name": "ac1bsinitvals42.fw",
+        "bytes": 368,
+        "sha256": "c00e1b0dae0822f0d8272d0a1b9f80bbdb94c7b42fd16fd028760a0b36831234"
+      },
+      {
+        "name": "ac1initvals42.fw",
+        "bytes": 3442,
+        "sha256": "db94d13f5bdf31d1cfcaa1a9e376df6813c1d670da3e37d2361cd264d3beba15"
+      }
+    ]
+  },
+  "scope": "Qualified host-driver source prerelease; private permanent image excluded; clean generic full-image rebuild not claimed",
+  "original_series": {
+    "816-02-core-support-for-the-ac-phy.patch": {
+      "bytes": 209950,
+      "sha256": "71d9f99f8619e5fbbecac362bbd13c908646eed9aa398d12d791a6ecf1cd9fd2"
+    },
+    "816-03-acphy-bringup.patch": {
+      "bytes": 590891,
+      "sha256": "89aa98719866e496b03bc7db55ffbcfb6f19c6fc10255c707ba015b8c7dc3803"
+    },
+    "816-04-refuse-unverified-frontends.patch": {
+      "bytes": 878,
+      "sha256": "e8c72b4be32409085889d4a45160a4fb88f3a26786f4fbb09dd34a45df25d9b3"
+    },
+    "816-05-frontend3-sub0-5ghz.patch": {
+      "bytes": 3000,
+      "sha256": "770c71dd4aa405ea4cb816b645d1db76e394c89d11385af560815484c8f7d694"
+    },
+    "816-06-arm-safe-5850us-busy-wait.patch": {
+      "bytes": 474,
+      "sha256": "25be3ce028e6ca9326a094157cce59c948d238ca50746d6b395bd7e083fdaaa3"
+    },
+    "880-bcma-ssb-support-the-BCM4352-BCM4360-family.patch": {
+      "bytes": 48802,
+      "sha256": "baf93fe2ae8cdbf824f858e2cf1952eed4ad9a71635a2dc46880d56e76707ee9"
+    }
+  },
+  "release_b43_sha256": "b7970aed0163bd050a7514c7f92803fff9379ce93f7d7b696cb449db84048789",
+  "release_mac80211_sha256": "cdcf3316e0220fba0939e7274ae399bfe8c7dbb3deb4ad5c6faac8ee933ba172"
+}

@@ -1,0 +1,11 @@
+# Installation and recovery boundary
+
+The lab unit uses an original-layout NOR installation with a persistent JFFS2 overlay. Its successful permanent installation wrote only the designated OS/root payload regions while preserving bootloader, factory identity/calibration and NVRAM regions. That result is not permission to flash another device using guessed offsets or a generic C5/C7 image.
+
+This preview contains **no installable image and no flash command**. Do not use the historical SafeLoader container as a TP-Link factory-web or CFE recovery image. It was designed for a specifically reviewed Linux upgrade path. A clean public artifact and exact installation/recovery contract remain prerequisites.
+
+The current known-working installed OpenWrt system is the lab fallback, not an assumed older19.07 copy. Historical RAM experiments used a matching kernel/modules/root, no trial flash writes, a direct wired management path, an independent control host and a previously qualified external power return. Receive-only UART supplied logs; it was not recovery control. Hung-kernel watchdog recovery remains unverified.
+
+Before any future candidate deployment, verify exact device revision and flash layout, offline backups and protected hashes, independent wired management, an operator-qualified return to the current known-good firmware, matching image/module/firmware identities, and an explicit bounded test/abort/recovery envelope. Do not unload the active wireless module, intentionally reproduce the stall, or improvise reset/programmer wiring merely to try this preview.
+
+The latest b79714-minute mixed-workload qualification ran in a RAM image. Permanent integration and cold-power persistence are documented separately in `evidence/permanent-installation.json`. The former baseline firmware and fresh partition/config backups remain private recovery artifacts. The current installed target after promotion is b797/CDC, not the historical original9c3/163 pair. Successful power return does not prove recovery from every kernel failure or establish long-term reconnection reliability.

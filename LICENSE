@@ -1,0 +1,5 @@
+New project helper scripts and documentation: GPL-2.0-or-later.
+
+The complete GPLv2 text is provided in LICENSES/GPL-2.0.txt. You may choose a later version for new material under the preceding grant.
+
+Imported driver/kernel code and patch content retain their original per-file SPDX and copyright notices. The pinned b43-ac-wip top-level GPLv3 notice is retained in third_party/b43-ac-wip-LICENSE.txt and LICENSES/GPL-3.0.txt. This file does not relicense third-party material. See docs/PROVENANCE.md.

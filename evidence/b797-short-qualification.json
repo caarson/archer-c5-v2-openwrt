@@ -1,0 +1,230 @@
+{
+  "UTC": "2026-11-02T07:27:05.885966+00:00",
+  "outcome": "PASS \u2014 Short functional qualification",
+  "active_duration_s": 840.3927601770265,
+  "hard_limit_s": 900,
+  "bursts": [
+    {
+      "label": "rx10",
+      "direction": "download",
+      "requested_Mbps": 10,
+      "received_Mbps": 10.064971835299419,
+      "receiver_seconds": 10.001349,
+      "receiver_bytes": 12582912,
+      "retransmits": null,
+      "rc": 0
+    },
+    {
+      "label": "rx25",
+      "direction": "download",
+      "requested_Mbps": 25,
+      "received_Mbps": 25.05789430215855,
+      "receiver_seconds": 10.001226,
+      "receiver_bytes": 31326208,
+      "retransmits": null,
+      "rc": 0
+    },
+    {
+      "label": "rx50",
+      "direction": "download",
+      "requested_Mbps": 50,
+      "received_Mbps": 50.01389931739334,
+      "receiver_seconds": 10.000635,
+      "receiver_bytes": 62521344,
+      "retransmits": null,
+      "rc": 0
+    },
+    {
+      "label": "rx100",
+      "direction": "download",
+      "requested_Mbps": 100,
+      "received_Mbps": 100.02093763413852,
+      "receiver_seconds": 10.001321,
+      "receiver_bytes": 125042688,
+      "retransmits": null,
+      "rc": 0
+    },
+    {
+      "label": "rx150",
+      "direction": "download",
+      "requested_Mbps": 150,
+      "received_Mbps": 149.94049033277898,
+      "receiver_seconds": 10.000392,
+      "receiver_bytes": 187432960,
+      "retransmits": null,
+      "rc": 0
+    },
+    {
+      "label": "rx200",
+      "direction": "download",
+      "requested_Mbps": 200,
+      "received_Mbps": 199.94546810241758,
+      "receiver_seconds": 10.000899,
+      "receiver_bytes": 249954304,
+      "retransmits": null,
+      "rc": 0
+    },
+    {
+      "label": "tx10",
+      "direction": "upload",
+      "requested_Mbps": 10,
+      "received_Mbps": 10.060566907275513,
+      "receiver_seconds": 10.005728,
+      "receiver_bytes": 12582912,
+      "retransmits": 0,
+      "rc": 0
+    },
+    {
+      "label": "tx25",
+      "direction": "upload",
+      "requested_Mbps": 25,
+      "received_Mbps": 25.046199160974687,
+      "receiver_seconds": 10.005896,
+      "receiver_bytes": 31326208,
+      "retransmits": 1,
+      "rc": 0
+    },
+    {
+      "label": "tx50",
+      "direction": "upload",
+      "requested_Mbps": 50,
+      "received_Mbps": 48.856176684119745,
+      "receiver_seconds": 10.216153,
+      "receiver_bytes": 62390272,
+      "retransmits": 0,
+      "rc": 0
+    }
+  ],
+  "CPU_peak_interval_percent": 86.34294385432474,
+  "CPU_peak_gate_percent": 86.34294385432473,
+  "minimum_available_KiB": 64604,
+  "latency": [
+    {
+      "path": "wired",
+      "sent": 54,
+      "received": 54,
+      "loss_percent": 0.0,
+      "median_ms": 0.461,
+      "p95_ms": 0.54555,
+      "max_ms": 0.715
+    },
+    {
+      "path": "gateway",
+      "sent": 54,
+      "received": 54,
+      "loss_percent": 0.0,
+      "median_ms": 3.747,
+      "p95_ms": 5.704700000000001,
+      "max_ms": 6.199
+    },
+    {
+      "path": "public",
+      "sent": 54,
+      "received": 54,
+      "loss_percent": 0.0,
+      "median_ms": 17.17,
+      "p95_ms": 22.7442,
+      "max_ms": 29.598
+    }
+  ],
+  "DNS_NOERROR": 54,
+  "probe_sets": 54,
+  "existing_SSH_heartbeats": 54,
+  "LuCI_replies": 54,
+  "integrity_checks": 11,
+  "integrity_PASS": true,
+  "integrity_under150": [
+    {
+      "elapsed": 386.912,
+      "label": "under150",
+      "integrity": true
+    }
+  ],
+  "critical_maxima": {
+    "rx_zero": 0,
+    "rx_poison": 0,
+    "rx_oversize": 0,
+    "rx_underrun": 0,
+    "tx_bad_cookie": 0,
+    "tx_out_of_order": 0,
+    "tx_skip": 0,
+    "tx_poison": 0,
+    "tx_second_invalid": 0,
+    "tx_invalid_bounds": 0,
+    "tx_map_fail": 0,
+    "rx_alloc_fail": 0
+  },
+  "hardware_record_guard_last": {
+    "hw_amsdu_schema": 1,
+    "enabled": 1,
+    "seen": 1,
+    "dropped": 1,
+    "tid0_valid": 1,
+    "other_valid": 0
+  },
+  "station_counter_deltas": {
+    "tx retries": 1325,
+    "tx failed": 33,
+    "beacon loss": 0,
+    "rx drop misc": 177,
+    "rx bytes": 746510567,
+    "tx bytes": 118025194,
+    "rx packets": 513736,
+    "tx packets": 116970
+  },
+  "interface_deltas": {
+    "phy1-sta0": {
+      "rx_bytes": 725870927,
+      "rx_packets": 497443,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 118025508,
+      "tx_packets": 116973,
+      "tx_errors": 0,
+      "tx_drops": 0
+    },
+    "lan1": {
+      "rx_bytes": 133901792,
+      "rx_packets": 137394,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 730205169,
+      "tx_packets": 503964,
+      "tx_errors": 0,
+      "tx_drops": 0
+    },
+    "br-lan": {
+      "rx_bytes": 131978276,
+      "rx_packets": 137394,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 730092507,
+      "tx_packets": 502257,
+      "tx_errors": 0,
+      "tx_drops": 0
+    },
+    "eth0": {
+      "rx_bytes": 134451368,
+      "rx_packets": 137394,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 732221035,
+      "tx_packets": 503964,
+      "tx_errors": 0,
+      "tx_drops": 0
+    }
+  },
+  "abort_reasons": [],
+  "skips": [],
+  "limits": [
+    "14minute functional exposure cannot establish longterm reliability or historicalstall eliminated.",
+    "No forced disconnect/reconnect; automatic recovery from ordinary disturbances remains untested.",
+    "Paced200Mbps10s is not a throughput ceiling or225/250Mbps qualification.",
+    "RTT gateway/public probes are router-originated, not fullrackinternet RTT.",
+    "Sparse loss observations and aggregate retry/drop counters are not exact testflow loss.",
+    "Experimentalpagepool cache/DMA lifetime risks not exhausted by this test."
+  ],
+  "b43_sha256": "b7970aed0163bd050a7514c7f92803fff9379ce93f7d7b696cb449db84048789",
+  "mac80211_sha256": "cdcf3316e0220fba0939e7274ae399bfe8c7dbb3deb4ad5c6faac8ee933ba172",
+  "scope": "RAM qualification of the exact host-driver pair subsequently selected for permanent integration; not long-term availability evidence"
+}

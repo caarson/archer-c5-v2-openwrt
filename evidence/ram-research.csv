@@ -1,0 +1,6 @@
+configuration,requested_mbps,receiver_mbps,duration_s,router_cpu_busy_pct,installed_permanently
+BIDIRECTIONAL control pool off,150,150,35,63.14,False
+experimental pool on,150,150,35,59.6,False
+experimental pool on,200,199.98,50,79.71,False
+BIDIRECTIONAL control pool off,200,199.98,50,82.79,False
+experimental pool on,225,224.99,35,87.04,False

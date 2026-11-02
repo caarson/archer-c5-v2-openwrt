@@ -1,0 +1,15 @@
+{
+  "rx_pool": {
+    "PASS": true,
+    "cases": 48410,
+    "host": "Apple Silicon macOS",
+    "address_undefined_sanitizers": true,
+    "scope": "focused fixture, not hardware DMA proof"
+  },
+  "reorder_trigger": {
+    "PASS": true,
+    "cases": 13460,
+    "address_undefined_sanitizers": true,
+    "scope": "real observer helpers with API stand-ins; not kernel concurrency proof"
+  }
+}

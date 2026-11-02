@@ -1,0 +1,31 @@
+{
+  "PASS": true,
+  "base_commit": "64900e756efa667774214f9c6b17c113222e01f7",
+  "existing_base_files": 11,
+  "integration_patch_check_apply_reverse": [
+    {
+      "operation": "git apply --check",
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "operation": "git apply",
+      "rc": 0,
+      "stderr": "patches/openwrt/0001-original-layout-integration.patch:4464: space before tab in indent.\n \t\tcompatible = \"tplink,safeloader-partitions\";\npatches/openwrt/0001-original-layout-integration.patch:4465: space before tab in indent.\n \t\tpartitions-table-offset = <0xe50000>;\npatches/openwrt/0001-original-layout-integration.patch:4466: trailing whitespace.\n \npatches/openwrt/0001-original-layout-integration.patch:4515: space before tab in indent.\n \t\tpartition-os-image {\npatches/openwrt/0001-original-layout-integration.patch:4516: space before tab in indent.\n \t\t\tcompatible = \"brcm,trx\";\nwarning: squelched 6 whitespace errors\nwarning: 11 lines add whitespace errors.\n"
+    },
+    {
+      "operation": "git apply --reverse --check",
+      "rc": 0,
+      "stderr": ""
+    },
+    {
+      "operation": "git apply --reverse",
+      "rc": 0,
+      "stderr": ""
+    }
+  ],
+  "wrong_HEAD_guard_refused": true,
+  "firmware_build_run": false,
+  "hardware_test_run": false,
+  "patch_sha256": "306b140e1911552af38f742286ac494b044aeb28a4bf5cebf7a61fc53e41d418"
+}

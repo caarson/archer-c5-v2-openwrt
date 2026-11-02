@@ -1,0 +1,127 @@
+--- a/drivers/net/wireless/broadcom/b43/dma.c
++++ b/drivers/net/wireless/broadcom/b43/dma.c
+@@ -388,6 +388,10 @@
+ 	return map32[controller_idx];
+ }
+ 
++bool b43_rx_bidir;
++module_param_named(rx_bidir, b43_rx_bidir, bool, 0400);
++MODULE_PARM_DESC(rx_bidir, "AC RX bidirectional DMA ownership (lab only, default off)");
++
+ static inline
+     dma_addr_t map_descbuffer(struct b43_dmaring *ring,
+ 			      unsigned char *buf, size_t len, int tx)
+@@ -399,7 +403,7 @@
+ 					 buf, len, DMA_TO_DEVICE);
+ 	} else {
+ 		dmaaddr = dma_map_single(ring->dev->dev->dma_dev,
+-					 buf, len, DMA_FROM_DEVICE);
++					 buf, len, ring->rx_dma_dir);
+ 	}
+ 
+ 	return dmaaddr;
+@@ -414,7 +418,7 @@
+ 				 addr, len, DMA_TO_DEVICE);
+ 	} else {
+ 		dma_unmap_single(ring->dev->dev->dma_dev,
+-				 addr, len, DMA_FROM_DEVICE);
++				 addr, len, ring->rx_dma_dir);
+ 	}
+ }
+ 
+@@ -424,7 +428,7 @@
+ {
+ 	B43_WARN_ON(ring->tx);
+ 	dma_sync_single_for_cpu(ring->dev->dev->dma_dev,
+-				    addr, len, DMA_FROM_DEVICE);
++				    addr, len, ring->rx_dma_dir);
+ }
+ 
+ static inline
+@@ -433,7 +437,7 @@
+ {
+ 	B43_WARN_ON(ring->tx);
+ 	dma_sync_single_for_device(ring->dev->dev->dma_dev,
+-				   addr, len, DMA_FROM_DEVICE);
++				   addr, len, ring->rx_dma_dir);
+ }
+ 
+ static inline
+@@ -945,6 +949,8 @@
+ 
+ 	ring->type = type;
+ 	ring->dev = dev;
++	ring->rx_dma_dir = b43_rx_bidir && dev->phy.type == B43_PHYTYPE_AC ?
++		DMA_BIDIRECTIONAL : DMA_FROM_DEVICE;
+ 	ring->mmio_base = b43_dmacontroller_base(type, controller_index);
+ 	ring->index = controller_index;
+ 	if (type == B43_DMA_64BIT)
+@@ -1831,7 +1837,7 @@
+ 		sync_descbuffer_for_cpu(ring, addr, len + ring->frameoffset);
+ 		atomic_inc(&ring->dev->wl->rxsync_payloads);
+ 		dma_unmap_single_attrs(ring->dev->dev->dma_dev, addr,
+-				       ring->rx_buffersize, DMA_FROM_DEVICE,
++				       ring->rx_buffersize, ring->rx_dma_dir,
+ 				       DMA_ATTR_SKIP_CPU_SYNC);
+ 		atomic_inc(&ring->dev->wl->rxsync_skips);
+ 		WRITE_ONCE(ring->dev->wl->rxsync_lastlen, len);
+@@ -1912,6 +1918,9 @@
+ 		while (1) {
+ 			desc = ops->idx2desc(ring, *slot, &meta);
+ 			/* recycle the descriptor buffer. */
++			if (ring->rx_dma_dir == DMA_BIDIRECTIONAL)
++				sync_descbuffer_for_cpu(ring, meta->dmaaddr,
++					 ring->frameoffset + sizeof(struct b43_plcp_hdr6) + 2);
+ 			b43_poison_rx_buffer(ring, meta->skb);
+ 			sync_descbuffer_for_device(ring, meta->dmaaddr,
+ 						   ring->rx_buffersize);
+@@ -1960,6 +1969,9 @@
+ 
+ drop_recycle_buffer:
+ 	/* Poison and recycle the RX buffer. */
++	if (ring->rx_dma_dir == DMA_BIDIRECTIONAL)
++		sync_descbuffer_for_cpu(ring, dmaaddr,
++			 ring->frameoffset + sizeof(struct b43_plcp_hdr6) + 2);
+ 	b43_poison_rx_buffer(ring, skb);
+ 	sync_descbuffer_for_device(ring, dmaaddr, ring->rx_buffersize);
+ }
+--- a/drivers/net/wireless/broadcom/b43/dma.h
++++ b/drivers/net/wireless/broadcom/b43/dma.h
+@@ -3,6 +3,7 @@
+ #define B43_DMA_H_
+ 
+ #include <linux/err.h>
++#include <linux/dma-direction.h>
+ 
+ #include "b43.h"
+ 
+@@ -260,6 +261,7 @@
+ 	u32 frameoffset;
+ 	/* Descriptor buffer size. */
+ 	u16 rx_buffersize;
++	enum dma_data_direction rx_dma_dir;
+ 	/* The MMIO base register of the DMA controller. */
+ 	u16 mmio_base;
+ 	/* DMA controller index number (0-5). */
+--- a/drivers/net/wireless/broadcom/b43/stall_diag.h
++++ b/drivers/net/wireless/broadcom/b43/stall_diag.h
+@@ -87,6 +87,7 @@
+ extern bool b43_stall_diag_enabled;
+ extern bool b43_stall_hot_detail;
+ extern bool b43_dma_cost_enabled;
++extern bool b43_rx_bidir;
+ struct b43_wldev;
+ int b43_stall_diag_register(struct b43_wldev *dev);
+ void b43_stall_diag_unregister(struct b43_wldev *dev);
+--- a/drivers/net/wireless/broadcom/b43/sysfs.c
++++ b/drivers/net/wireless/broadcom/b43/sysfs.c
+@@ -570,6 +570,9 @@
+     names[i], p->calls, (unsigned long long)p->ns, p->max_ns);
+   }
+  }
++	n += sysfs_emit_at(buf, n, "rx_direction_schema=1 requested_bidir=%u active_bidir=%u\n",
++		b43_rx_bidir, dev->dma.rx_ring &&
++		dev->dma.rx_ring->rx_dma_dir == DMA_BIDIRECTIONAL);
+ 	mutex_unlock(&wl->mutex);
+ 	return n;
+ }

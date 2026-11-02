@@ -1,0 +1,13 @@
+--- a/drivers/net/wireless/broadcom/b43/phy_ac.c
++++ b/drivers/net/wireless/broadcom/b43/phy_ac.c
+@@ -2889,7 +2889,9 @@
+ 	 * read after. The capture delays 5848 us after the wide-open write.
+ 	 */
+ 	b43_phy_write(dev, 0x16d8, 0xffff);
+-	udelay(5850);
++	/* ARM rejects constant udelay() beyond 2 ms; keep the same busy wait. */
++	mdelay(5);
++	udelay(850);
+ 
+ 	b43_phy_maskset(dev, 0x0160, (u16)~0x0007, coremask);
+ 	b43_phy_maskset(dev, B43_PHY_AC_RF_SEQ_MODE, (u16)~0x0070,

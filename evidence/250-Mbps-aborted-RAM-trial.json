@@ -1,0 +1,24 @@
+{
+  "assessment": "ABORTED_CPU_GATE; 250 Mbps stability not qualified",
+  "qualified_250": false,
+  "candidate": "b797 RAM-only page-pool candidate; unchanged from prior 225 Mbps trial",
+  "requested_Mbps": 250,
+  "requested_duration_s": 50,
+  "completed_interval_seconds": 14.001105964183807,
+  "completed_interval_bytes": 433192960,
+  "partial_receiver_Mbps": 247.51928089575196,
+  "peak_sliding_cpu_pct": 98.30220713073005,
+  "cpu_gate_limit_pct": 97,
+  "trigger_window_s": 5.89,
+  "minimum_available_KiB": 65328,
+  "post_window_SHA256_check": "not run due abort",
+  "stall_detected_before_abort": false,
+  "limits": [
+    "Partial receiver intervals only; no terminal iperf summary or sender retransmit total",
+    "No application integrity test after aborted stage",
+    "No passive RF capture; selected mac80211 flow instrumentation disabled for this scoped performance trial",
+    "No long-duration stability or hardware ceiling conclusion; historical stall unresolved",
+    "Counters reflect all traffic, not exclusively benchmark unicast"
+  ],
+  "installed_firmware_restored_protected_hashes_match": true
+}

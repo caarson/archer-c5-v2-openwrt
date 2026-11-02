@@ -1,0 +1,432 @@
+{
+  "source/installed-b43/Kconfig": {
+    "sha256": "4a207b80a6439661e119d820cee15a8e1a6d5e680139e74c0db2e804dcf759d9",
+    "bytes": 5741,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/Makefile": {
+    "sha256": "83ee095db24d8b28007adf8df74acab13bd3c2ec95756d4675e26d92c75111b2",
+    "bytes": 1078,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/b43.h": {
+    "sha256": "d3d38df741dd917e1aaec30ef0396597c845a2795d17a30f05a3a227b50bb3b4",
+    "bytes": 51963,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/b43.mod.c": {
+    "sha256": "64e0b4a28bea532bcd72ef14246799d7884c28bfa1b4721000cb0a39ddc1cd6a",
+    "bytes": 404,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/bus.c": {
+    "sha256": "d71f2ef3c1467867c5772838a9d0b0d2db64ecf16dd8abef31ecd3d3a4527f73",
+    "bytes": 6705,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/bus.h": {
+    "sha256": "2aae80b89be738f82861cd305a69808bc09fefe6362913873b0b6ef6520b3e27",
+    "bytes": 2374,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/debugfs.c": {
+    "sha256": "c624560981ff794a4c3b4bffe6bc976746ed34457f4683968171fd9412d0a2c2",
+    "bytes": 17567,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/debugfs.h": {
+    "sha256": "ce1fb0b8e589c8542fe6948e7ff5f484580858841d4a427865049ede2cdcef88",
+    "bytes": 2533,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/dma.c": {
+    "sha256": "d2d08ba9940059465311f0e4ebafac0a47c483ff66dbdac63b7625d483d31c42",
+    "bytes": 50200,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/dma.h": {
+    "sha256": "ced26deb5ae22daa14b134ac9070196b92c8f1c97ea0fa1ddd1c335ee144b87a",
+    "bytes": 10610,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/helpers_phy_ac.c": {
+    "sha256": "0ee0ea5a2d44f244371be97fd1b3a935e4b63056cdd7e8c2584ea6430875d4f5",
+    "bytes": 3376,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/leds.c": {
+    "sha256": "a7af348876e4d904be4accbcd59afc49382e38aef4a52124a2c4bc94a47fefde",
+    "bytes": 9977,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/leds.h": {
+    "sha256": "5fcf8b516a12eafba4225e5d83203ffa75746493ddecdcfb78664b2333b53f77",
+    "bytes": 2345,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/lo.c": {
+    "sha256": "d6670b8e27a175901e6bb8ccac1b589c3c64b3d41dd30b119a08ecfe96b7b6a8",
+    "bytes": 26769,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/lo.h": {
+    "sha256": "d114a341a7caad210b400e0ae05c6817bfae47e77cd036a1fdc26042636115ea",
+    "bytes": 2553,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/main.c": {
+    "sha256": "54c1adb2e7248a444062e1b0f00888837209a913c43817b1e160c6b3d533fcb0",
+    "bytes": 216482,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/main.h": {
+    "sha256": "5dc65349de27cb8666f1c1cda68535f35e3e8158da942853aeed8c57f57d231b",
+    "bytes": 3200,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_a.h": {
+    "sha256": "7b9da8dde071268fd6b8a1e943f76e802c164fb31e778d092579c003e437b1ea",
+    "bytes": 5772,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_ac.c": {
+    "sha256": "5d8e6505d8e5bdf51916fa3be8d29a10d9af21a5e09b7608956cbeb336b635f1",
+    "bytes": 395518,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_ac.h": {
+    "sha256": "bc46b9f586e0bb1061044a20cc9f4448f2e7a9951a3012e64c65b9f15847a579",
+    "bytes": 34347,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_common.c": {
+    "sha256": "315aa0952d1aea6c9fa8386696bc19def5426be831253f22f4ae3194a1b5134c",
+    "bytes": 15623,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_common.h": {
+    "sha256": "398c1d9550bff10d5b31d73c1875ad60f573a37bb94c97542ad3f387f7cf7d4a",
+    "bytes": 15177,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_g.c": {
+    "sha256": "ace00e946ed2a602691923bb7f7d8527217c1c9d19c7ad450ebadba27bb75069",
+    "bytes": 82939,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_g.h": {
+    "sha256": "ac6b74d5d39fa45320415fe6b9938d5b29c91c8507bfa1905cabd35e68aa600a",
+    "bytes": 7115,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_ht.c": {
+    "sha256": "1bee7edfad3a6a8d21c7889960eb343d65e36b6cb035fa8cf5c4bcff8a518824",
+    "bytes": 33049,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_ht.h": {
+    "sha256": "07164d5ba432a7fb55dcc664f10d2ef6346e1e6d129737bb97caf82fc9cdd97a",
+    "bytes": 5985,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_lcn.c": {
+    "sha256": "088e6375b0e6f7205b47db5ca4e4df3a5750c0d318802d6077f22d7d9f2e3bf4",
+    "bytes": 24627,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_lcn.h": {
+    "sha256": "67d4dcc1ffa0a9b34d99b9a7d99dc8807c7bb91d3829114a32a94f8154a4057f",
+    "bytes": 992,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_lp.c": {
+    "sha256": "39e68916a1e5b29c67a2a64ad4681883a28b60eded2e9f1857649ba5ac5c5c5a",
+    "bytes": 98071,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_lp.h": {
+    "sha256": "fc5ab145919a6cb3a63a26181e062596a290d1a7340b1c40d5d288fce9a64ed3",
+    "bytes": 60783,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_n.c": {
+    "sha256": "c284763e92b5a12a5f241764190628223ae6502793d0899d19ae78aa42c2abc0",
+    "bytes": 201665,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/phy_n.h": {
+    "sha256": "66f65911da324f2f57ac5595d1e01171bfa94a7a25f7afe727ac94190c6ed0cc",
+    "bytes": 61669,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/pio.c": {
+    "sha256": "407e6475266613e5cb47d5f3368ce2b2b47a1a5b38b2657d8e85bbb00f7b8560",
+    "bytes": 20315,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/pio.h": {
+    "sha256": "011b87be26a61da93c36a6ffa86de61edde38554b099c90cb240de155ada39cd",
+    "bytes": 5124,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/ppr.c": {
+    "sha256": "b5a2e6de18d913e81371e18e13b3cfa2e621035306490b27ddde0606cbb62642",
+    "bytes": 4950,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/ppr.h": {
+    "sha256": "6657dc26c4fcbec94554ce093dbc188cc8eecbbe13f03909c0e430a212e6d3a1",
+    "bytes": 1297,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/ppr_ac.c": {
+    "sha256": "ef1585f1b29ed11c59daf10c02a44b0961489c03b86fffcf793e80e9636d883e",
+    "bytes": 9700,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/ppr_ac.h": {
+    "sha256": "3939c7d781b0640f225c152f777d9e1c5b35765456ec144a6e263b072b0a2bb8",
+    "bytes": 3844,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2055.c": {
+    "sha256": "344b3cef1fc4bd8a5702ea6aab5ddec76ff62e34d5fe314dad3d55456a6a039d",
+    "bytes": 53344,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2055.h": {
+    "sha256": "355ce7074cb78318ef76b94484f85e0fddc11f88bab1692a9cf53d7cbe515b94",
+    "bytes": 13444,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2056.c": {
+    "sha256": "cecdfab4647d10395537628a86b540f84a6802b298083a3de01fdce13b66e65f",
+    "bytes": 520969,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2056.h": {
+    "sha256": "73cb42b56b917ff8ad60d124ca61fff14ff62edec7580d3924694b13ba19dbc8",
+    "bytes": 38995,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2057.c": {
+    "sha256": "1629c622c4af615ed5b7b6c05da4920ef520ee3b2a72fe529b01e783d4085caa",
+    "bytes": 21709,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2057.h": {
+    "sha256": "c0051d97ccde1a246a8b682ea62b3e78c7d2939b68d7979a8ba78807a448b9f7",
+    "bytes": 19141,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2059.c": {
+    "sha256": "93c6a08f9e316168205c02d7963b41e6cfd4087b257ea5ed39467990ab2b3e4f",
+    "bytes": 10890,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2059.h": {
+    "sha256": "9833531c2dee269b1cf3ac4c9d3cbaaf119221ba22a097541837dd95d68e3a78",
+    "bytes": 1477,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2069.c": {
+    "sha256": "1edeb4ce5b15eb2a22b1af4d632b0032813f4a7644ef05c06fccc49b7851996a",
+    "bytes": 65684,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/radio_2069.h": {
+    "sha256": "68bfa520bc22e79ceeac11881238ac9223143dbba3fc1eeb4b3e97000d4fc86f",
+    "bytes": 1472,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/rfkill.c": {
+    "sha256": "8b90db3bba82952772071ba57f48aa2057c03a49a145344b53002613042407c2",
+    "bytes": 1272,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/rfkill.h": {
+    "sha256": "80ed2920954ae97b6083f71816a7932fc7d9e89c39116d820d51ad239cceb6c0",
+    "bytes": 253,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/sdio.c": {
+    "sha256": "71c339d71714086bcc3afb34c12388165d3ab89a0edc6f46855c22339b1f0ac3",
+    "bytes": 4534,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/sdio.h": {
+    "sha256": "8d8c5792439e8808f50e263ed271cfb9672f9cd0937f734c4a73ba4fc9949591",
+    "bytes": 833,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/sysfs.c": {
+    "sha256": "2ba3f29bb6877ee48aa647c56624ffd87a69e0c7618ede245c9ad7b0f838e2b1",
+    "bytes": 2710,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/sysfs.h": {
+    "sha256": "8611fb51d3df87ee8c5806d761ff814e8abfd971a86bd42644f957c11672b07a",
+    "bytes": 225,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables.c": {
+    "sha256": "81e7d7968226563de3f18c539a0a9486febbd1be1daef1e14a516a19f0933615",
+    "bytes": 13938,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables.h": {
+    "sha256": "4afcc1e76a44f552978f9e8011096602bed62d35e3507b907a93c1a36a2562ec",
+    "bytes": 1145,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_lpphy.c": {
+    "sha256": "358d21461f8b8a62b09a9512819f2ab9bdf50ccd36c56215ecd931617b7b496f",
+    "bytes": 153198,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_lpphy.h": {
+    "sha256": "d18005bc194f41b5222d8e5654ee5d224ff18442afda72f6faeee20b17341b76",
+    "bytes": 1852,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_nphy.c": {
+    "sha256": "1a86e625c255ddd7e42cc51abff06ac262301e5c3fa48d8e3074c9263051e97c",
+    "bytes": 160367,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_nphy.h": {
+    "sha256": "591ec1a992e85a512e9d8516be0e170028fd1188889d1d7b9b17abf7bc4dbdfd",
+    "bytes": 8964,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_phy_ac.c": {
+    "sha256": "75a34bb7380e6107243d61f69f0c06cefa4c9a4dce35c53a53040ad3752d1551",
+    "bytes": 58377,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_phy_ac.h": {
+    "sha256": "7e9cbd3aa86d1ac454716e2594eee312a26998eb47c084f2fe4e64979fbdab58",
+    "bytes": 1787,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_phy_ht.c": {
+    "sha256": "263a743d317b5bbe011306f2b329bb83380b32d30ce09b809cba877a12bd0fd8",
+    "bytes": 32288,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_phy_ht.h": {
+    "sha256": "2e23a904bfa1e56211d10674a9be12d03403474668e1d56e93d411401b0b2349",
+    "bytes": 1107,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_phy_lcn.c": {
+    "sha256": "e31d01c99d291c8d264c5e0cbf2e4b502eaf368d1fbc07ed9ae1f03cc2fcdb29",
+    "bytes": 24531,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/tables_phy_lcn.h": {
+    "sha256": "66a74b585808ef42b961a4202a459a8ea1f5d81b5db7b0663306209cf9416ef7",
+    "bytes": 1001,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/wa.c": {
+    "sha256": "e2ce0d20f2457514cd5967b45f3832a38e2700731c4c763e56e1891ef08a3f80",
+    "bytes": 10890,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/wa.h": {
+    "sha256": "1eac73f0c963ec8657ce6053f602266af28fdd85e7f87a05bececeeec30ad1a0",
+    "bytes": 186,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/xmit.c": {
+    "sha256": "0a0ad5cbc18fbf74c27c7243cf2312b584e8c6eb4061ca99592123d144f2ecda",
+    "bytes": 51913,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "source/installed-b43/xmit.h": {
+    "sha256": "b8d747c1fd1b51634001fbc012235dc6f2681bf94314c0ce0b9bec8fa4497728",
+    "bytes": 20305,
+    "origin": "installed-baseline control source; byte-identical module reconstruction recorded in Phase 2"
+  },
+  "patches/b43/816-02-core-support-for-the-ac-phy.patch": {
+    "sha256": "71d9f99f8619e5fbbecac362bbd13c908646eed9aa398d12d791a6ecf1cd9fd2",
+    "bytes": 209950,
+    "origin": "historical six-patch bring-up series; upstream and Archer delta classifications in docs/PROVENANCE.md"
+  },
+  "patches/b43/816-03-acphy-bringup.patch": {
+    "sha256": "89aa98719866e496b03bc7db55ffbcfb6f19c6fc10255c707ba015b8c7dc3803",
+    "bytes": 590891,
+    "origin": "historical six-patch bring-up series; upstream and Archer delta classifications in docs/PROVENANCE.md"
+  },
+  "patches/b43/816-04-refuse-unverified-frontends.patch": {
+    "sha256": "e8c72b4be32409085889d4a45160a4fb88f3a26786f4fbb09dd34a45df25d9b3",
+    "bytes": 878,
+    "origin": "historical six-patch bring-up series; upstream and Archer delta classifications in docs/PROVENANCE.md"
+  },
+  "patches/b43/816-05-frontend3-sub0-5ghz.patch": {
+    "sha256": "770c71dd4aa405ea4cb816b645d1db76e394c89d11385af560815484c8f7d694",
+    "bytes": 3000,
+    "origin": "historical six-patch bring-up series; upstream and Archer delta classifications in docs/PROVENANCE.md"
+  },
+  "patches/b43/816-06-arm-safe-5850us-busy-wait.patch": {
+    "sha256": "25be3ce028e6ca9326a094157cce59c948d238ca50746d6b395bd7e083fdaaa3",
+    "bytes": 474,
+    "origin": "historical six-patch bring-up series; upstream and Archer delta classifications in docs/PROVENANCE.md"
+  },
+  "patches/b43/880-bcma-ssb-support-the-BCM4352-BCM4360-family.patch": {
+    "sha256": "baf93fe2ae8cdbf824f858e2cf1952eed4ad9a71635a2dc46880d56e76707ee9",
+    "bytes": 48802,
+    "origin": "historical six-patch bring-up series; upstream and Archer delta classifications in docs/PROVENANCE.md"
+  },
+  "third_party/b43-ac-wip-LICENSE.txt": {
+    "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "bytes": 35149,
+    "origin": "aleferri/b43-ac-wip@7ae3a61e61f2cc7b7e84f5bba3918401ea46816e/LICENSE"
+  },
+  "third_party/b43-ac-wip-PROVENANCE.md": {
+    "sha256": "4972b2c43c47d1a0270e7a67305dce08eeca572f8644cf484b03acf764a2885a",
+    "bytes": 4616,
+    "origin": "same upstream pin; copyright/provenance retained verbatim"
+  },
+  "LICENSES/GPL-2.0.txt": {
+    "sha256": "8780e78a1a737e127f25a65f6d95269bffd36158dc261114de7859b490bfc5aa",
+    "bytes": 18600,
+    "origin": "Linux backports LICENSES/preferred/GPL-2.0"
+  },
+  "LICENSES/GPL-3.0.txt": {
+    "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+    "bytes": 35149,
+    "origin": "upstream top-level license notice"
+  },
+  "patches/openwrt/0001-original-layout-integration.patch": {
+    "sha256": "306b140e1911552af38f742286ac494b044aeb28a4bf5cebf7a61fc53e41d418",
+    "bytes": 121790,
+    "origin": "working production build source versus OpenWrt commit 64900e756efa667774214f9c6b17c113222e01f7; historical non-AC packager hashes intentionally retained"
+  },
+  "configs/installed-kernel.config": {
+    "sha256": "04c42b16194e4814d6d2812f226ae4df934ed773b584251450341e2323e241d2",
+    "bytes": 99905,
+    "origin": "exact installed production kernel configuration"
+  },
+  "configs/openwrt-build.config": {
+    "sha256": "db2a7e276242358fac971ce4742498e74bd1da03664e6bfac3879df57caeb50b",
+    "bytes": 283609,
+    "origin": "production build selections, with developer-specific toolchain path replaced by documented generic path"
+  },
+  "configs/backports.config": {
+    "sha256": "96077eba160bae544a71b0b9596a35da74195bb43e769521e81b59a8cbffed48",
+    "bytes": 27288,
+    "origin": "byte-identical installed baseline backports configuration"
+  },
+  "patches/b43-upstream-to-installed-review.patch": {
+    "sha256": "7354d6589b9bae4d5fe4e1dc2c2cef5476ea1c9033dbd866a38166f6c3b83a0c",
+    "bytes": 47298,
+    "origin": "review-only diff from pinned upstream b43 files to exact installed baseline; not an additional patch to apply after the six-patch series"
+  },
+  "manifests/upstream-pins.json": {
+    "sha256": "0ebd30e550286871f178e5ab2a5c9e396c3a7e4b4eb6014e71775a64dec27fd0",
+    "bytes": 2716,
+    "origin": "curated public provenance and identities; no device provisioning"
+  }
+}

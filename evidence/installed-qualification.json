@@ -1,0 +1,79 @@
+{
+  "outcome": "CONDITIONAL \u2014 Functional but concerns remain",
+  "functional_workload_pass": true,
+  "start_utc": "2026-11-02T03:05:52.843300+00:00",
+  "end_utc": "2026-11-02T03:19:53.247226+00:00",
+  "duration_s": 840.4039253599476,
+  "peak_cpu_pct": 39.88970588235294,
+  "median_cpu_pct": 4.708097928436916,
+  "cpu_window_seconds_range": [
+    5.252930833026767,
+    5.765974869951606
+  ],
+  "min_mem_available_kib": 69356,
+  "peak_memory_unavailable_pct": 43.54691671550433,
+  "probe_sets": 54,
+  "dns_success": 54,
+  "existing_ssh_success": 54,
+  "file_integrity_checks": 7,
+  "file_integrity_all_pass": true,
+  "station_delta": {
+    "tx retries": 843,
+    "tx failed": 34,
+    "beacon loss": 0,
+    "rx drop misc": 170,
+    "rx bytes": 120165462,
+    "tx bytes": 116426678,
+    "rx packets": 108426,
+    "tx packets": 104683
+  },
+  "net_delta": {
+    "phy1-sta0": {
+      "rx_bytes": 114100380,
+      "rx_packets": 92024,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 116426678,
+      "tx_packets": 104683,
+      "tx_errors": 0,
+      "tx_drops": 0
+    },
+    "lan1": {
+      "rx_bytes": 115597665,
+      "rx_packets": 112426,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 119981474,
+      "tx_packets": 99085,
+      "tx_errors": 0,
+      "tx_drops": 0
+    },
+    "br-lan": {
+      "rx_bytes": 114023701,
+      "rx_packets": 112426,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 119827496,
+      "tx_packets": 96752,
+      "tx_errors": 0,
+      "tx_drops": 0
+    },
+    "eth0": {
+      "rx_bytes": 116047369,
+      "rx_packets": 112426,
+      "rx_errors": 0,
+      "rx_drops": 0,
+      "tx_bytes": 120377834,
+      "tx_packets": 99085,
+      "tx_errors": 0,
+      "tx_drops": 0
+    }
+  },
+  "boot_unchanged": true,
+  "taint_unchanged": true,
+  "all_identity_hashes_match": true,
+  "abort_reasons": [],
+  "recovery_actions": 0,
+  "privacy": "Curated numeric results; no raw captures, household/device addresses, boot IDs, credentials or personal paths.",
+  "scope": "Installed original baseline. Single radio data hop between wired endpoints; six paced10s TCP tests, rates10/25/50Mbps per direction; no recovery interruption."
+}

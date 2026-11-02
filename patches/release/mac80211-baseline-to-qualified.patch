@@ -1,0 +1,942 @@
+--- a/wpa.c
++++ b/wpa.c
+@@ -13,6 +13,9 @@
+ #include <linux/ieee80211.h>
+ #include <linux/gfp.h>
+ #include <linux/unaligned.h>
++#include <linux/moduleparam.h>
++#include <linux/spinlock.h>
++#include <linux/jiffies.h>
+ #include <net/mac80211.h>
+ #include <crypto/aes.h>
+ #include <crypto/utils.h>
+@@ -24,6 +27,165 @@
+ #include "aes_gmac.h"
+ #include "aes_gcm.h"
+ #include "wpa.h"
++
++
++
++/* Opt-in defensive trial guard at the observed PN-update boundary.
++ * A noncanonical IV on a frame merely labelled decrypted must not poison
++ * replay state. This does not establish why that IV reached mac80211.
++ * Normal software MIC verification and all PN comparisons remain intact.
++ */
++static bool phase3_ccmp_iv_guard;
++module_param_named(phase3_ccmp_iv_guard, phase3_ccmp_iv_guard, bool, 0400);
++MODULE_PARM_DESC(phase3_ccmp_iv_guard, "Trial guard for noncanonical hardware-decrypted CCMP IV");
++
++static bool phase3_ccmp_iv_canonical(const u8 *iv, size_t length)
++{
++	return length >= 8 && iv[2] == 0 && (iv[3] & 0x3f) == 0x20;
++}
++
++/* RAM-only PN transition observer. Never reads key bytes or changes validation.
++ * Records at most two initial, two >65536 jumps, and eight replay events.
++ * PN/IV are wire-header metadata; only already-validated CCMP/GCMP offsets
++ * are observed. No payload capture, allocations or logging in the RX path.
++ */
++#define PHASE3_PN_RECORDS 12U
++static bool phase3_pn_diag;
++module_param_named(phase3_pn_diag, phase3_pn_diag, bool, 0400);
++MODULE_PARM_DESC(phase3_pn_diag, "Enable bounded RAM-trial pairwise PN metadata");
++
++struct phase3_pn_record {
++	u64 flags;
++	u32 observed_jiffies, key_color, cipher, length;
++	u16 sequence, frame_control, header_length;
++	u8 queue, key_index, kind;
++	u8 pn[6], previous[6], iv[8];
++};
++static struct phase3_pn_record phase3_pn_records[PHASE3_PN_RECORDS];
++static unsigned int phase3_pn_count, phase3_pn_kinds[3];
++static const unsigned int phase3_pn_limits[3] = { 2, 2, 8 };
++static DEFINE_SPINLOCK(phase3_pn_lock);
++
++#include "phase3_trigger_pn.h"
++
++static u64 phase3_pn_value(const u8 *pn)
++{
++	return ((u64)pn[0] << 40) | ((u64)pn[1] << 32) |
++	       ((u64)pn[2] << 24) | ((u64)pn[3] << 16) |
++	       ((u64)pn[4] << 8) | pn[5];
++}
++
++static void phase3_pn_observe(struct ieee80211_rx_data *rx, const u8 *pn,
++			     const u8 *previous, const u8 *iv,
++			     int header_length, bool replay)
++{
++	struct phase3_pn_record *record;
++	struct ieee80211_hdr *header;
++	struct ieee80211_rx_status *status;
++	unsigned long irq_flags;
++	u64 value, old;
++	unsigned int kind;
++	int queue = rx->security_idx;
++
++	if (!READ_ONCE(phase3_pn_diag) || !rx->key ||
++	    !(rx->key->conf.flags & IEEE80211_KEY_FLAG_PAIRWISE) ||
++	    rx->sdata->vif.type != NL80211_IFTYPE_STATION ||
++	    queue < 0 || queue > IEEE80211_NUM_TIDS ||
++	    header_length < 24 || header_length > 36 ||
++	    rx->skb->len < (unsigned int)header_length + 8)
++		return;
++	phase3_reorder_pn_observe(rx, pn, previous, iv, header_length,
++				 replay ? 1 : 0);
++	if (replay) {
++		kind = 2;
++	} else {
++		old = phase3_pn_value(previous);
++		value = phase3_pn_value(pn);
++		if (!old)
++			kind = 0;
++		else if (value > old && value - old > 65536)
++			kind = 1;
++		else
++			return;
++	}
++	if (READ_ONCE(phase3_pn_kinds[kind]) >= phase3_pn_limits[kind])
++		return;
++	header = (void *)rx->skb->data;
++	status = IEEE80211_SKB_RXCB(rx->skb);
++	spin_lock_irqsave(&phase3_pn_lock, irq_flags);
++	if (phase3_pn_count >= PHASE3_PN_RECORDS ||
++	    phase3_pn_kinds[kind] >= phase3_pn_limits[kind])
++		goto out;
++	record = &phase3_pn_records[phase3_pn_count];
++	record->flags = status->flag;
++	record->observed_jiffies = (u32)jiffies;
++	record->key_color = rx->key->color;
++	record->cipher = rx->key->conf.cipher;
++	record->length = rx->skb->len;
++	record->sequence = le16_to_cpu(header->seq_ctrl);
++	record->frame_control = le16_to_cpu(header->frame_control);
++	record->header_length = header_length;
++	record->queue = queue;
++	record->key_index = rx->key->conf.keyidx;
++	record->kind = kind;
++	memcpy(record->pn, pn, 6);
++	memcpy(record->previous, previous, 6);
++	memcpy(record->iv, iv, 8);
++	phase3_pn_kinds[kind]++;
++	phase3_pn_count++;
++out:
++	spin_unlock_irqrestore(&phase3_pn_lock, irq_flags);
++}
++
++static void phase3_pn_hex(char *destination, const u8 *source, unsigned int size)
++{
++	static const char hex[] = "0123456789abcdef";
++	unsigned int i;
++
++	for (i = 0; i < size; i++) {
++		destination[2 * i] = hex[source[i] >> 4];
++		destination[2 * i + 1] = hex[source[i] & 15];
++	}
++	destination[2 * size] = 0;
++}
++
++static int phase3_pn_get(char *buffer, const struct kernel_param *unused)
++{
++	struct phase3_pn_record copy[PHASE3_PN_RECORDS];
++	unsigned long irq_flags;
++	unsigned int i, count;
++	int offset = 0;
++	char pn[13], previous[13], iv[17];
++
++	spin_lock_irqsave(&phase3_pn_lock, irq_flags);
++	count = min(phase3_pn_count, PHASE3_PN_RECORDS);
++	memcpy(copy, phase3_pn_records, sizeof(copy));
++	spin_unlock_irqrestore(&phase3_pn_lock, irq_flags);
++	offset += scnprintf(buffer + offset, PAGE_SIZE - offset,
++			    "schema=1 enabled=%u records=%u max=%u pairwise_station_only=1 kinds=0:initial,1:jump_gt65536,2:replay\n",
++			    READ_ONCE(phase3_pn_diag), count, PHASE3_PN_RECORDS);
++	for (i = 0; i < count && offset < PAGE_SIZE - 1; i++) {
++		const struct phase3_pn_record *record = &copy[i];
++
++		phase3_pn_hex(pn, record->pn, 6);
++		phase3_pn_hex(previous, record->previous, 6);
++		phase3_pn_hex(iv, record->iv, 8);
++		offset += scnprintf(buffer + offset, PAGE_SIZE - offset,
++				    "kind=%u j=%u key_color=%u cipher=%08x queue=%u key_index=%u flags=%016llx sequence=%04x fc=%04x length=%u hdr=%u pn=%s previous=%s iv=%s\n",
++				    record->kind, record->observed_jiffies,
++				    record->key_color, record->cipher,
++				    record->queue, record->key_index,
++				    (unsigned long long)record->flags,
++				    record->sequence, record->frame_control,
++				    record->length, record->header_length,
++				    pn, previous, iv);
++	}
++	return offset;
++}
++static const struct kernel_param_ops phase3_pn_ops = {
++	.get = phase3_pn_get,
++};
++module_param_cb(phase3_pn_snapshot, &phase3_pn_ops, NULL, 0400);
+ 
+ ieee80211_tx_result
+ ieee80211_tx_h_michael_mic_add(struct ieee80211_tx_data *tx)
+@@ -549,6 +711,15 @@
+ 	if (!(status->flag & RX_FLAG_PN_VALIDATED)) {
+ 		int res;
+ 
++		if (READ_ONCE(phase3_ccmp_iv_guard) &&
++		    (status->flag & RX_FLAG_DECRYPTED) &&
++		    !phase3_ccmp_iv_canonical(skb->data + hdrlen,
++					      skb->len - hdrlen)) {
++			phase3_reorder_pn_observe(rx, NULL, NULL,
++						 skb->data + hdrlen, hdrlen, 2);
++			return RX_DROP_U_NONCANONICAL_HW_CCMP_IV;
++		}
++
+ 		ccmp_hdr2pn(pn, skb->data + hdrlen);
+ 
+ 		queue = rx->security_idx;
+@@ -557,6 +728,8 @@
+ 			     IEEE80211_CCMP_PN_LEN);
+ 		if (res < 0 ||
+ 		    (!res && !(status->flag & RX_FLAG_ALLOW_SAME_PN))) {
++			phase3_pn_observe(rx, pn, key->u.ccmp.rx_pn[queue],
++					  skb->data + hdrlen, hdrlen, true);
+ 			key->u.ccmp.replays++;
+ 			return RX_DROP_U_REPLAY;
+ 		}
+@@ -576,6 +749,8 @@
+ 				return RX_DROP_U_MIC_FAIL;
+ 		}
+ 
++		phase3_pn_observe(rx, pn, key->u.ccmp.rx_pn[queue],
++				  skb->data + hdrlen, hdrlen, false);
+ 		memcpy(key->u.ccmp.rx_pn[queue], pn, IEEE80211_CCMP_PN_LEN);
+ 		if (unlikely(ieee80211_is_frag(hdr)))
+ 			memcpy(rx->ccm_gcm.pn, pn, IEEE80211_CCMP_PN_LEN);
+@@ -753,6 +928,8 @@
+ 			     IEEE80211_GCMP_PN_LEN);
+ 		if (res < 0 ||
+ 		    (!res && !(status->flag & RX_FLAG_ALLOW_SAME_PN))) {
++			phase3_pn_observe(rx, pn, key->u.gcmp.rx_pn[queue],
++					  skb->data + hdrlen, hdrlen, true);
+ 			key->u.gcmp.replays++;
+ 			return RX_DROP_U_REPLAY;
+ 		}
+@@ -773,6 +950,8 @@
+ 				return RX_DROP_U_MIC_FAIL;
+ 		}
+ 
++		phase3_pn_observe(rx, pn, key->u.gcmp.rx_pn[queue],
++				  skb->data + hdrlen, hdrlen, false);
+ 		memcpy(key->u.gcmp.rx_pn[queue], pn, IEEE80211_GCMP_PN_LEN);
+ 		if (unlikely(ieee80211_is_frag(hdr)))
+ 			memcpy(rx->ccm_gcm.pn, pn, IEEE80211_CCMP_PN_LEN);
+--- a/ieee80211_i.h
++++ b/ieee80211_i.h
+@@ -2922,4 +2922,8 @@
+ #define VISIBLE_IF_MAC80211_KUNIT static
+ #endif
+ 
++/* Diagnostic-only correlation; no exported module symbol. */
++bool phase3_reorder_trigger_matches(struct ieee80211_sub_if_data *sdata,
++				   unsigned int tid, u16 sc, const u8 *iv);
++
+ #endif /* IEEE80211_I_H */
+--- a/drop.h
++++ b/drop.h
+@@ -65,6 +65,7 @@
+ 	/* 0x30 */				\
+ 	R(RX_DROP_U_BAD_MGMT_KEYIDX)		\
+ 	R(RX_DROP_U_UNKNOWN_ACTION_REJECTED)	\
++	R(RX_DROP_U_NONCANONICAL_HW_CCMP_IV)	\
+ /* this line for the trailing \ - add before this */
+ 
+ /* having two enums allows for checking ieee80211_rx_result use with sparse */
+--- a/rx.c
++++ b/rx.c
+@@ -19,6 +19,8 @@
+ #include <linux/export.h>
+ #include <linux/kcov.h>
+ #include <linux/bitops.h>
++#include <linux/moduleparam.h>
++#include <linux/atomic.h>
+ #include <kunit/visibility.h>
+ #include <net/mac80211.h>
+ #include <net/ieee80211_radiotap.h>
+@@ -33,6 +35,176 @@
+ #include "tkip.h"
+ #include "wme.h"
+ #include "rate.h"
++
++
++/*
++ * RAM-trial observer only. Count the already-decided station drop reason.
++ * No packet/crypto/key data is read or modified. Fixed, saturating atomics;
++ * no allocations, locks or logging in the packet path. The read-only module
++ * parameter is an approximate counter snapshot, not a coherent transaction.
++ */
++#define PHASE3_RX_REASON_MAX 64U
++static bool phase3_rx_diag;
++module_param_named(phase3_rx_diag, phase3_rx_diag, bool, 0400);
++MODULE_PARM_DESC(phase3_rx_diag, "Enable bounded RAM-trial station RX drop counters");
++
++static atomic_t phase3_rx_reasons[PHASE3_RX_REASON_MAX + 1];
++static const char * const phase3_rx_reason_names[] = {
++	"RX_DROP",
++#define PHASE3_RX_LABEL(x) #x,
++	MAC80211_DROP_REASONS_UNUSABLE(PHASE3_RX_LABEL)
++#undef PHASE3_RX_LABEL
++};
++
++static void phase3_rx_drop_count(ieee80211_rx_result result)
++{
++	u32 index;
++
++	if (!READ_ONCE(phase3_rx_diag))
++		return;
++	index = (__force u32)result - (__force u32)RX_DROP;
++	if (index >= PHASE3_RX_REASON_MAX)
++		index = PHASE3_RX_REASON_MAX;
++	atomic_add_unless(&phase3_rx_reasons[index], 1, INT_MAX);
++}
++
++static int phase3_rx_drop_get(char *buffer, const struct kernel_param *unused)
++{
++	unsigned int i;
++	int offset = 0;
++
++	offset += scnprintf(buffer + offset, PAGE_SIZE - offset,
++			    "schema=1 enabled=%u station_handlers_only=1 max_reason=%u saturates_at=%u\n",
++			    READ_ONCE(phase3_rx_diag), PHASE3_RX_REASON_MAX,
++			    INT_MAX);
++	for (i = 0; i <= PHASE3_RX_REASON_MAX && offset < PAGE_SIZE - 1; i++) {
++		int count = atomic_read(&phase3_rx_reasons[i]);
++		const char *name = i < ARRAY_SIZE(phase3_rx_reason_names) ?
++				  phase3_rx_reason_names[i] : "unknown";
++
++		if (count)
++			offset += scnprintf(buffer + offset, PAGE_SIZE - offset,
++					    "reason=%u name=%s count=%d\n",
++					    i, name, count);
++	}
++	return offset;
++}
++
++static const struct kernel_param_ops phase3_rx_drop_ops = {
++	.get = phase3_rx_drop_get,
++};
++module_param_cb(phase3_rx_drop_snapshot, &phase3_rx_drop_ops, NULL, 0400);
++
++#include "phase3_reorder_diag.h"
++#include "phase3_reorder_trigger.h"
++
++/* Bounded RAM-trial flow observer at the MAC-to-IP-stack boundary.
++ * eth_type_trans() has removed Ethernet in every caller of this hook.
++ * Copies only IPv4(20), TCP prefix(8) or ICMP type(1), never application data.
++ * Protocol checksum validation occurs later: counts indicate this boundary,
++ * not successful TCP delivery. Per-port slots distinguish control/data flows.
++ */
++#define PHASE3_FLOW_SLOTS 8
++static bool phase3_flow_diag;
++module_param_named(phase3_flow_diag, phase3_flow_diag, bool, 0400);
++MODULE_PARM_DESC(phase3_flow_diag, "Enable bounded fixed-tuple RAM MAC delivery counters");
++struct phase3_flow_slot {
++ atomic_t port, packets, ip_bytes;
++ u32 last_sequence;
++ unsigned long last_j;
++};
++static struct phase3_flow_slot phase3_flow_slots[PHASE3_FLOW_SLOTS];
++static atomic_t phase3_flow_gateway_reply, phase3_flow_slot_full;
++
++static void phase3_flow_add(atomic_t *counter, unsigned int amount)
++{
++ int old = atomic_read(counter), next, seen;
++ while (old < INT_MAX) {
++  next = old + min_t(unsigned int, amount, INT_MAX - old);
++  seen = atomic_cmpxchg(counter, old, next);
++  if (seen == old)
++   return;
++  old = seen;
++ }
++}
++
++static void phase3_flow_observe(struct sk_buff *skb,
++                               const struct ieee80211_rx_data *rx)
++{
++ static const u8 source[4] = {192,168,0,134};
++ static const u8 target[4] = {192,168,0,146};
++ static const u8 gateway[4] = {192,168,0,1};
++ u8 ip[20], l4[8];
++ unsigned int hlen, total, fragment, port, i;
++ u32 sequence;
++ if (!READ_ONCE(phase3_flow_diag) || !rx->sta ||
++     rx->sdata->vif.type != NL80211_IFTYPE_STATION ||
++     skb->protocol != cpu_to_be16(ETH_P_IP))
++  return;
++ if (skb_copy_bits(skb, 0, ip, sizeof(ip)) || (ip[0] >> 4) != 4)
++  return;
++ hlen = (ip[0] & 15) * 4;
++ total = ((unsigned int)ip[2] << 8) | ip[3];
++ fragment = ((unsigned int)ip[6] << 8) | ip[7];
++ if (hlen < 20 || total < hlen || total > skb->len ||
++     (fragment & 0x1fff) || memcmp(ip + 16, target, 4))
++  return;
++ if (ip[9] == 1 && !memcmp(ip + 12, gateway, 4)) {
++  if (total >= hlen + 1 && !skb_copy_bits(skb, hlen, l4, 1) &&
++      l4[0] == 0)
++   phase3_flow_add(&phase3_flow_gateway_reply, 1);
++  return;
++ }
++ if (ip[9] != 6 || memcmp(ip + 12, source, 4) ||
++     total < hlen + 8 || skb_copy_bits(skb, hlen, l4, 8) ||
++     (((unsigned int)l4[0] << 8) | l4[1]) != 5209)
++  return;
++ port = ((unsigned int)l4[2] << 8) | l4[3];
++ if (!port)
++  return;
++ sequence = ((u32)l4[4] << 24) | ((u32)l4[5] << 16) |
++            ((u32)l4[6] << 8) | l4[7];
++ for (i = 0; i < PHASE3_FLOW_SLOTS; i++) {
++  struct phase3_flow_slot *slot = &phase3_flow_slots[i];
++  int key = atomic_read(&slot->port);
++  if (!key)
++   key = atomic_cmpxchg(&slot->port, 0, port);
++  if (key && key != (int)port)
++   continue;
++  phase3_flow_add(&slot->packets, 1);
++  phase3_flow_add(&slot->ip_bytes, total);
++  WRITE_ONCE(slot->last_sequence, sequence);
++  WRITE_ONCE(slot->last_j, jiffies);
++  return;
++ }
++ phase3_flow_add(&phase3_flow_slot_full, 1);
++}
++
++static int phase3_flow_get(char *buffer, const struct kernel_param *unused)
++{
++ unsigned int i;
++ int n = 0;
++ n += scnprintf(buffer + n, PAGE_SIZE - n,
++      "schema=1 enabled=%u source=192.168.0.134 target=192.168.0.146 sport=5209 gateway=192.168.0.1 slots=8 ip_checksum_not_yet_validated=1 saturates_at=%u\n",
++      READ_ONCE(phase3_flow_diag), INT_MAX);
++ n += scnprintf(buffer + n, PAGE_SIZE - n,
++      "gateway_echo_replies=%d slot_full=%d\n",
++      atomic_read(&phase3_flow_gateway_reply), atomic_read(&phase3_flow_slot_full));
++ for (i = 0; i < PHASE3_FLOW_SLOTS && n < PAGE_SIZE - 1; i++) {
++  struct phase3_flow_slot *slot = &phase3_flow_slots[i];
++  int port = atomic_read(&slot->port);
++  if (port)
++   n += scnprintf(buffer + n, PAGE_SIZE - n,
++        "slot=%u dport=%d packets=%d ip_bytes=%d last_sequence=%08x last_j=%lu\n",
++        i, port, atomic_read(&slot->packets), atomic_read(&slot->ip_bytes),
++        READ_ONCE(slot->last_sequence), READ_ONCE(slot->last_j));
++ }
++ return n;
++}
++static const struct kernel_param_ops phase3_flow_ops = {
++ .get = phase3_flow_get,
++};
++module_param_cb(phase3_flow_snapshot, &phase3_flow_ops, NULL, 0400);
+ 
+ /*
+  * monitor mode reception
+@@ -1273,6 +1445,10 @@
+ 	u16 head_seq_num, buf_size;
+ 	int index;
+ 	bool ret = true;
++	u16 phase3_before;
++	u32 phase3_flags = (u32)status->flag;
++	u32 phase3_frames = skb_queue_len(frames);
++	unsigned int phase3_decision = 0;
+ 
+ 	spin_lock(&tid_agg_rx->reorder_lock);
+ 
+@@ -1288,6 +1464,7 @@
+ 
+ 	buf_size = tid_agg_rx->buf_size;
+ 	head_seq_num = tid_agg_rx->head_seq_num;
++	phase3_before = head_seq_num;
+ 
+ 	/*
+ 	 * If the current MPDU's SN is smaller than the SSN, it shouldn't
+@@ -1296,6 +1473,7 @@
+ 	if (unlikely(!tid_agg_rx->started)) {
+ 		if (ieee80211_sn_less(mpdu_seq_num, head_seq_num)) {
+ 			ret = false;
++			phase3_decision = 1;
+ 			goto out;
+ 		}
+ 		tid_agg_rx->started = true;
+@@ -1304,6 +1482,7 @@
+ 	/* frame with out of date sequence number */
+ 	if (ieee80211_sn_less(mpdu_seq_num, head_seq_num)) {
+ 		dev_kfree_skb(skb);
++		phase3_decision = 2;
+ 		goto out;
+ 	}
+ 
+@@ -1314,6 +1493,10 @@
+ 	if (!ieee80211_sn_less(mpdu_seq_num, head_seq_num + buf_size)) {
+ 		head_seq_num = ieee80211_sn_inc(
+ 				ieee80211_sn_sub(mpdu_seq_num, buf_size));
++		if (unlikely(((head_seq_num - phase3_before) & 4095) > 128))
++			phase3_reorder_trigger_capture(sdata, tid_agg_rx, skb,
++						      mpdu_seq_num, phase3_before,
++						      head_seq_num);
+ 		/* release stored frames up to new head to stack */
+ 		ieee80211_release_reorder_frames(sdata, tid_agg_rx,
+ 						 head_seq_num, frames);
+@@ -1326,6 +1509,7 @@
+ 	/* check if we already stored this frame */
+ 	if (ieee80211_rx_reorder_ready(tid_agg_rx, index)) {
+ 		dev_kfree_skb(skb);
++		phase3_decision = 3;
+ 		goto out;
+ 	}
+ 
+@@ -1341,9 +1525,11 @@
+ 			tid_agg_rx->head_seq_num =
+ 				ieee80211_sn_inc(tid_agg_rx->head_seq_num);
+ 		ret = false;
++		phase3_decision = 4;
+ 		goto out;
+ 	}
+ 
++	phase3_decision = 5;
+ 	/* put the frame in the reordering buffer */
+ 	__skb_queue_tail(&tid_agg_rx->reorder_buf[index], skb);
+ 	if (!(status->flag & RX_FLAG_AMSDU_MORE)) {
+@@ -1353,6 +1539,9 @@
+ 	}
+ 
+  out:
++	phase3_reorder_note(sdata, tid_agg_rx, mpdu_seq_num, phase3_before,
++			    phase3_decision, skb_queue_len(frames) - phase3_frames,
++			    phase3_flags);
+ 	spin_unlock(&tid_agg_rx->reorder_lock);
+ 	return ret;
+ }
+@@ -2631,6 +2820,8 @@
+ 	struct ieee80211_sub_if_data *sdata = rx->sdata;
+ 	struct net_device *dev = sdata->dev;
+ 
++	phase3_flow_observe(skb, rx);
++
+ 	if (unlikely((skb->protocol == sdata->control_port_protocol ||
+ 		     (skb->protocol == cpu_to_be16(ETH_P_PREAUTH) &&
+ 		      !sdata->control_port_no_preauth)) &&
+@@ -4093,8 +4284,10 @@
+ 
+ 	if (res != RX_CONTINUE) {
+ 		I802_DEBUG_INC(rx->sdata->local->rx_handlers_drop);
+-		if (rx->sta)
++		if (rx->sta) {
++			phase3_rx_drop_count(res);
+ 			rx->link_sta->rx_stats.dropped++;
++		}
+ 	}
+ 
+ 	kfree_skb_reason(rx->skb, (__force u32)res);
+@@ -4178,15 +4371,20 @@
+ 			goto rxh_next;  \
+ 	} while (0)
+ 
++	phase3_rx_path_note(rx, 0, 1);
+ 	CALL_RXH(ieee80211_rx_h_check_dup);
+ 	CALL_RXH(ieee80211_rx_h_check);
+ 
++	phase3_rx_path_note(rx, 1, 1);
+ 	ieee80211_rx_reorder_ampdu(rx, &reorder_release);
++	phase3_rx_path_note(rx, 2, 1);
++	phase3_rx_path_note(rx, 3, skb_queue_len(&reorder_release));
+ 
+ 	ieee80211_rx_handlers(rx, &reorder_release);
+ 	return;
+ 
+  rxh_next:
++	phase3_rx_early_note(rx, res);
+ 	ieee80211_rx_handlers_result(rx, res);
+ 
+ #undef CALL_RXH
+--- /dev/null
++++ b/phase3_reorder_trigger.h
+@@ -0,0 +1,111 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Observe the first TID0 MPDU that would shift the BA window by >128.
++ * Called with the existing reorder_lock, before any possible skb free.
++ * Only public 802.11 header fields and a bounded 8-byte IV are copied.
++ * No acceptance, ordering, timer, crypto or delivery decisions are changed.
++ */
++struct phase3_reorder_trigger {
++	u64 flags;
++	u32 at, length;
++	u16 incoming, before, predicted, fc, sc, hdrlen;
++	u8 ra[ETH_ALEN], ta[ETH_ALEN], iv[8];
++	bool valid, iv_present;
++};
++static struct phase3_reorder_trigger phase3_reorder_trigger;
++
++static void phase3_reorder_trigger_capture(struct ieee80211_sub_if_data *sdata,
++					  struct tid_ampdu_rx *agg,
++					  struct sk_buff *skb, u16 incoming,
++					  u16 before, u16 predicted)
++{
++	struct phase3_reorder_trigger t = {};
++	struct ieee80211_hdr *hdr;
++	unsigned long irqflags;
++
++	if (!phase3_reorder_scope(sdata) || agg->tid ||
++	    READ_ONCE(phase3_reorder_trigger.valid) || skb->len < 24)
++		return;
++	hdr = (void *)skb->data;
++	t.flags = IEEE80211_SKB_RXCB(skb)->flag;
++	t.at = (u32)jiffies;
++	t.length = skb->len;
++	t.incoming = incoming;
++	t.before = before;
++	t.predicted = predicted;
++	t.fc = le16_to_cpu(hdr->frame_control);
++	t.sc = le16_to_cpu(hdr->seq_ctrl);
++	t.hdrlen = ieee80211_hdrlen(hdr->frame_control);
++	ether_addr_copy(t.ra, hdr->addr1);
++	ether_addr_copy(t.ta, hdr->addr2);
++	if (ieee80211_has_protected(hdr->frame_control) &&
++	    !(t.flags & RX_FLAG_IV_STRIPPED) &&
++	    t.hdrlen >= 24 && t.hdrlen <= 36 &&
++	    skb->len >= t.hdrlen + sizeof(t.iv) &&
++	    !skb_copy_bits(skb, t.hdrlen, t.iv, sizeof(t.iv)))
++		t.iv_present = true;
++	t.valid = true;
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	if (!phase3_reorder_trigger.valid)
++		phase3_reorder_trigger = t;
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++}
++
++/* Internal MAC-module bridge to the existing, validated PN boundary.
++ * Exact SC/TID/IV match within one second. No skb or key pointer retained.
++ * A match is correlation metadata, not an authentication decision.
++ */
++bool phase3_reorder_trigger_matches(struct ieee80211_sub_if_data *sdata,
++				   unsigned int tid, u16 sc, const u8 *iv)
++{
++	const struct phase3_reorder_trigger *t = &phase3_reorder_trigger;
++	unsigned long irqflags;
++	bool match;
++
++	if (!phase3_reorder_scope(sdata) || tid ||
++	    !READ_ONCE(t->valid))
++		return false;
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	match = t->valid && t->iv_present && t->sc == sc &&
++		(u32)((u32)jiffies - t->at) <= HZ &&
++		!memcmp(t->iv, iv, sizeof(t->iv));
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++	return match;
++}
++
++static void phase3_reorder_trigger_hex(char *out, const u8 *in, unsigned int n)
++{
++	static const char hex[] = "0123456789abcdef";
++	unsigned int i;
++
++	for (i = 0; i < n; i++) {
++		out[2 * i] = hex[in[i] >> 4];
++		out[2 * i + 1] = hex[in[i] & 15];
++	}
++	out[2 * n] = 0;
++}
++
++static int phase3_reorder_trigger_get(char *buffer,
++				     const struct kernel_param *unused)
++{
++	struct phase3_reorder_trigger t;
++	unsigned long irqflags;
++	char ra[13], ta[13], iv[17];
++
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	t = phase3_reorder_trigger;
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++	phase3_reorder_trigger_hex(ra, t.ra, 6);
++	phase3_reorder_trigger_hex(ta, t.ta, 6);
++	phase3_reorder_trigger_hex(iv, t.iv, 8);
++	return scnprintf(buffer, PAGE_SIZE,
++			 "trigger_schema=1 enabled=%u valid=%u tid=0 at=%u incoming=%u before=%u predicted=%u fc=%04x sc=%04x length=%u hdr=%u flags=%016llx ra=%s ta=%s iv_present=%u iv=%s\n",
++			 READ_ONCE(phase3_reorder_diag), t.valid, t.at,
++			 t.incoming, t.before, t.predicted, t.fc, t.sc,
++			 t.length, t.hdrlen, (unsigned long long)t.flags,
++			 ra, ta, t.iv_present, iv);
++}
++static const struct kernel_param_ops phase3_reorder_trigger_ops = {
++	.get = phase3_reorder_trigger_get,
++};
++module_param_cb(phase3_reorder_trigger_snapshot,
++		&phase3_reorder_trigger_ops, NULL, 0400);
+--- /dev/null
++++ b/phase3_reorder_diag.h
+@@ -0,0 +1,169 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* RAM observer: cached state under the existing reorder_lock; no decisions.
++ * A separate snapshot spinlock protects only our fixed-size scalar copies.
++ * Getter never takes a reorder lock. No reverse lock dependency.
++ */
++#define PHASE3_REORDER_SLOTS 4
++struct phase3_reorder_entry {
++	u32 calls, decision[8], at, incoming, before, head, stored, size;
++	u32 released, timer_pending, expires, flags;
++	u32 jump_at, jump_incoming, jump_before, jump_head;
++	u8 tid;
++	bool used, jump_valid;
++};
++static bool phase3_reorder_diag;
++module_param_named(phase3_reorder_diag, phase3_reorder_diag, bool, 0400);
++MODULE_PARM_DESC(phase3_reorder_diag, "Bounded RAM RX path/reorder observer");
++static struct phase3_reorder_entry phase3_reorder_entries[PHASE3_REORDER_SLOTS];
++static DEFINE_SPINLOCK(phase3_reorder_lock);
++static u32 phase3_reorder_slot_full;
++static atomic_t phase3_rx_path[4], phase3_rx_early[PHASE3_RX_REASON_MAX + 1];
++
++static bool phase3_reorder_scope(struct ieee80211_sub_if_data *sdata)
++{
++	static const u8 station[ETH_ALEN] = {0x62, 0xe3, 0x27, 0x3c, 0x51, 0xa8};
++
++	return READ_ONCE(phase3_reorder_diag) &&
++	       sdata->vif.type == NL80211_IFTYPE_STATION &&
++	       ether_addr_equal(sdata->vif.addr, station);
++}
++
++static void phase3_reorder_note(struct ieee80211_sub_if_data *sdata,
++			       struct tid_ampdu_rx *agg, u16 incoming,
++			       u16 before, unsigned int decision,
++			       u32 released, u32 flags)
++{
++	struct phase3_reorder_entry *e = NULL;
++	unsigned long irqflags;
++	unsigned int i;
++	u16 advance;
++
++	if (!phase3_reorder_scope(sdata) || decision >= 8)
++		return;
++	/* Caller still holds agg->reorder_lock. Never dereference its skb:
++	 * the normal path may already have freed that skb before this hook.
++	 */
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	for (i = 0; i < PHASE3_REORDER_SLOTS; i++) {
++		if (!phase3_reorder_entries[i].used ||
++		    phase3_reorder_entries[i].tid == agg->tid) {
++			e = &phase3_reorder_entries[i];
++			break;
++		}
++	}
++	if (!e) {
++		phase3_reorder_slot_full++;
++		goto out;
++	}
++	e->used = true;
++	e->tid = agg->tid;
++	e->calls++;
++	e->decision[decision]++;
++	e->at = (u32)jiffies;
++	e->incoming = incoming;
++	e->before = before;
++	e->head = agg->head_seq_num;
++	e->stored = agg->stored_mpdu_num;
++	e->size = agg->buf_size;
++	e->released = released;
++	e->timer_pending = timer_pending(&agg->reorder_timer);
++	e->expires = (u32)READ_ONCE(agg->reorder_timer.expires);
++	e->flags = flags;
++	advance = (agg->head_seq_num - before) & 4095;
++	if (!e->jump_valid && advance > 128) {
++		e->jump_valid = true;
++		e->jump_at = (u32)jiffies;
++		e->jump_incoming = incoming;
++		e->jump_before = before;
++		e->jump_head = agg->head_seq_num;
++	}
++ out:
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++}
++
++static void phase3_rx_path_note(struct ieee80211_rx_data *rx,
++			       unsigned int stage, unsigned int amount)
++{
++	if (stage < 4 && rx->sta && phase3_reorder_scope(rx->sdata))
++		atomic_add(amount, &phase3_rx_path[stage]);
++}
++
++static void phase3_rx_early_note(struct ieee80211_rx_data *rx,
++				ieee80211_rx_result result)
++{
++	u32 index;
++
++	if (!rx->sta || !phase3_reorder_scope(rx->sdata) ||
++	    result == RX_CONTINUE || result == RX_QUEUED)
++		return;
++	index = (__force u32)result - (__force u32)RX_DROP;
++	if (index > PHASE3_RX_REASON_MAX)
++		index = PHASE3_RX_REASON_MAX;
++	atomic_inc(&phase3_rx_early[index]);
++}
++
++static int phase3_reorder_get(char *buffer, const struct kernel_param *unused)
++{
++	struct phase3_reorder_entry copy[PHASE3_REORDER_SLOTS];
++	unsigned long irqflags;
++	unsigned int i, j;
++	u32 full;
++	int n;
++
++	spin_lock_irqsave(&phase3_reorder_lock, irqflags);
++	memcpy(copy, phase3_reorder_entries, sizeof(copy));
++	full = phase3_reorder_slot_full;
++	spin_unlock_irqrestore(&phase3_reorder_lock, irqflags);
++	n = scnprintf(buffer, PAGE_SIZE,
++		      "reorder_schema=1 enabled=%u slots=4 slot_full=%u decisions=0:unmarked,1:prestart_old_direct,2:stale_drop,3:stored_dup_drop,4:inorder_direct,5:buffered\n",
++		      READ_ONCE(phase3_reorder_diag), full);
++	for (i = 0; i < PHASE3_REORDER_SLOTS; i++) {
++		const struct phase3_reorder_entry *e = &copy[i];
++
++		if (!e->used)
++			continue;
++		n += scnprintf(buffer + n, PAGE_SIZE - n,
++			       "reorder_tid=%u calls=%u at=%u incoming=%u before=%u head=%u stored=%u size=%u released=%u pending=%u expires=%u flags=%08x decisions=",
++			       e->tid, e->calls, e->at, e->incoming, e->before,
++			       e->head, e->stored, e->size, e->released,
++			       e->timer_pending, e->expires, e->flags);
++		for (j = 0; j < 8; j++)
++			n += scnprintf(buffer + n, PAGE_SIZE - n, "%s%u",
++				       j ? "," : "", e->decision[j]);
++		n += scnprintf(buffer + n, PAGE_SIZE - n,
++			       " first_advance=%u,%u,%u,%u,%u\n",
++			       e->jump_valid, e->jump_at, e->jump_incoming,
++			       e->jump_before, e->jump_head);
++	}
++	return n;
++}
++static const struct kernel_param_ops phase3_reorder_ops = {
++	.get = phase3_reorder_get,
++};
++module_param_cb(phase3_reorder_snapshot, &phase3_reorder_ops, NULL, 0400);
++
++static int phase3_rx_path_get(char *buffer, const struct kernel_param *unused)
++{
++	unsigned int i;
++	int n;
++
++	n = scnprintf(buffer, PAGE_SIZE,
++		      "rx_path_schema=1 enabled=%u invoke=%u checks_passed=%u reorder_return=%u released_frames=%u finite_trial_counters_modulo32=1\n",
++		      READ_ONCE(phase3_reorder_diag),
++		      (u32)atomic_read(&phase3_rx_path[0]),
++		      (u32)atomic_read(&phase3_rx_path[1]),
++		      (u32)atomic_read(&phase3_rx_path[2]),
++		      (u32)atomic_read(&phase3_rx_path[3]));
++	for (i = 0; i <= PHASE3_RX_REASON_MAX; i++) {
++		u32 count = atomic_read(&phase3_rx_early[i]);
++
++		if (count)
++			n += scnprintf(buffer + n, PAGE_SIZE - n,
++				       "early_reason=%u count=%u\n", i, count);
++	}
++	return n;
++}
++static const struct kernel_param_ops phase3_rx_path_ops = {
++	.get = phase3_rx_path_get,
++};
++module_param_cb(phase3_rx_path_snapshot, &phase3_rx_path_ops, NULL, 0400);
+--- /dev/null
++++ b/phase3_trigger_pn.h
+@@ -0,0 +1,96 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/* Correlate one exact reorder trigger at the existing PN decision boundary.
++ * Reason 0: existing PN-accepted path; 1: existing replay rejection;
++ * 2: existing noncanonical-IV guard rejection (PN not decoded).
++ * Key identity is metadata; key material and pointers are never retained.
++ */
++static struct phase3_pn_record phase3_trigger_pn;
++static bool phase3_trigger_pn_valid, phase3_trigger_pn_present;
++static DEFINE_SPINLOCK(phase3_trigger_pn_lock);
++
++static void phase3_reorder_pn_observe(struct ieee80211_rx_data *rx,
++				    const u8 *pn, const u8 *previous,
++				    const u8 *iv, int hdrlen, u8 reason)
++{
++	struct phase3_pn_record t = {};
++	struct ieee80211_hdr *hdr;
++	unsigned long irqflags;
++	int queue = rx->security_idx;
++
++	if (!READ_ONCE(phase3_pn_diag) ||
++	    READ_ONCE(phase3_trigger_pn_valid) || !rx->key ||
++	    !(rx->key->conf.flags & IEEE80211_KEY_FLAG_PAIRWISE) ||
++	    rx->sdata->vif.type != NL80211_IFTYPE_STATION ||
++	    queue < 0 || queue > IEEE80211_NUM_TIDS ||
++	    hdrlen < 24 || hdrlen > 36 || reason > 2 ||
++	    rx->skb->len < (unsigned int)hdrlen + 8)
++		return;
++	hdr = (void *)rx->skb->data;
++	if (!phase3_reorder_trigger_matches(rx->sdata, queue,
++					   le16_to_cpu(hdr->seq_ctrl), iv))
++		return;
++	t.flags = IEEE80211_SKB_RXCB(rx->skb)->flag;
++	t.observed_jiffies = (u32)jiffies;
++	t.key_color = rx->key->color;
++	t.cipher = rx->key->conf.cipher;
++	t.length = rx->skb->len;
++	t.sequence = le16_to_cpu(hdr->seq_ctrl);
++	t.frame_control = le16_to_cpu(hdr->frame_control);
++	t.header_length = hdrlen;
++	t.queue = queue;
++	t.key_index = rx->key->conf.keyidx;
++	t.kind = reason;
++	memcpy(t.iv, iv, sizeof(t.iv));
++	if (pn && previous) {
++		memcpy(t.pn, pn, sizeof(t.pn));
++		memcpy(t.previous, previous, sizeof(t.previous));
++	}
++	spin_lock_irqsave(&phase3_trigger_pn_lock, irqflags);
++	if (!phase3_trigger_pn_valid) {
++		phase3_trigger_pn = t;
++		phase3_trigger_pn_present = pn && previous;
++		phase3_trigger_pn_valid = true;
++	}
++	spin_unlock_irqrestore(&phase3_trigger_pn_lock, irqflags);
++}
++
++static void phase3_trigger_pn_hex(char *out, const u8 *in, unsigned int n)
++{
++	static const char hex[] = "0123456789abcdef";
++	unsigned int i;
++
++	for (i = 0; i < n; i++) {
++		out[2 * i] = hex[in[i] >> 4];
++		out[2 * i + 1] = hex[in[i] & 15];
++	}
++	out[2 * n] = 0;
++}
++
++static int phase3_trigger_pn_get(char *buffer,
++				const struct kernel_param *unused)
++{
++	struct phase3_pn_record t;
++	unsigned long irqflags;
++	bool valid, present;
++	char pn[13], previous[13], iv[17];
++
++	spin_lock_irqsave(&phase3_trigger_pn_lock, irqflags);
++	t = phase3_trigger_pn;
++	valid = phase3_trigger_pn_valid;
++	present = phase3_trigger_pn_present;
++	spin_unlock_irqrestore(&phase3_trigger_pn_lock, irqflags);
++	phase3_trigger_pn_hex(pn, t.pn, 6);
++	phase3_trigger_pn_hex(previous, t.previous, 6);
++	phase3_trigger_pn_hex(iv, t.iv, 8);
++	return scnprintf(buffer, PAGE_SIZE,
++			 "pn_trigger_schema=1 enabled=%u valid=%u reason=%u j=%u key_color=%u cipher=%08x queue=%u key_index=%u flags=%016llx sequence=%04x fc=%04x length=%u hdr=%u pn_present=%u pn=%s previous=%s iv=%s\n",
++			 READ_ONCE(phase3_pn_diag), valid, t.kind,
++			 t.observed_jiffies, t.key_color, t.cipher, t.queue,
++			 t.key_index, (unsigned long long)t.flags,
++			 t.sequence, t.frame_control, t.length, t.header_length,
++			 present, pn, previous, iv);
++}
++static const struct kernel_param_ops phase3_trigger_pn_ops = {
++	.get = phase3_trigger_pn_get,
++};
++module_param_cb(phase3_reorder_pn_snapshot, &phase3_trigger_pn_ops, NULL, 0400);
