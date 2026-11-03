@@ -12,3 +12,5 @@
 - The2.4GHz AP is restored by the BCM43217 EPA initialization correction, with legacyb/g support only. The earlier channel1 qualification was conditional because of isolated ICMP/DNS loss; see [the correction and test limits](BCM43217-24GHZ.md). A short channel11 check cannot establish long-term radio reliability.
 
 - The extended2.4GHz follow-up still shows intermittent packet loss and occasional upload timeouts. Factory base-initialization, RX-gain, TX-chain and software-CCMP experiments did not establish a repeatable fix and are excluded. Functional connection is demonstrated; complete reliability is not.
+
+- The selected 618 working version passed a bounded 2.4 GHz functional RAM campaign, but adds diagnostics rather than a corrective data-path change. Recording is disabled in normal permanent use. Do not interpret the working designation as resolution of the historical intermittent transfer failure.

@@ -37,3 +37,7 @@ The selected release uses b43 SHA256`b7970aed0163bd050a7514c7f92803fff9379ce93f7
 The lab permanent image is provisioned privately and is not a release asset. Source publication does not assert that a generic public image has been built or qualified.
 
 Disabled diagnostic code retains lab-local address/flow filters for source fidelity. These are not portable configuration and do not affect the qualified configuration with the corresponding optional observers disabled. The station address in the observer fixture is required to match that helper’s filter. No saved wireless keys, SSH keys, NVRAM/calibration data or household packet captures are published.
+
+## 618 optional diagnostic delta
+
+The selected working experimental source adds a locally authored bounded N-PHY header observer to the 4130 initialization correction. Only b43.h, xmit.c, sysfs.c and two new observer headers change. There is no new RF table, ownership, crypto-policy, rate-control or recovery change. Exact current identities are in `manifests/upstream-pins.json`; historical b797 and 4130 evidence is retained.

@@ -1,0 +1,46 @@
+{
+  "outcome": "CONDITIONAL: bounded diagnostic campaign passed; historical interruption unresolved",
+  "active_seconds": 870,
+  "including_cleanup_seconds": 878.2396768030012,
+  "USB_flows_passed": 20,
+  "Mac_flows_passed": 3,
+  "verified_application_bytes": 175000000,
+  "USB_power_save": "on",
+  "USB_requested_rates_Mbps": [
+    2,
+    4
+  ],
+  "Mac_requested_rate_Mbps": 2,
+  "Mac_workload": "three uploads; not identical to earlier alternating four-flow failure profile",
+  "DNS_rounds_passed": 44,
+  "HTTPS_rounds_passed": 44,
+  "CPU_peak_percent": 37.42454728370221,
+  "minimum_MemAvailable_KiB": 59668,
+  "local_USB_to_AP_ping_median_ms": 1.95,
+  "local_USB_to_AP_ping_p95_ms": 9.82,
+  "ping_observed_sequences_answered": 869,
+  "ping_observed_missing": 0,
+  "ping_limit": "No terminal ping summary; final in-flight exposure is censored. Not internet latency or a definitive all-sent loss fraction.",
+  "association_samples": 175,
+  "station_connected_time_resets_observed": 0,
+  "N_trace_final_records": 11786,
+  "N_trace_overflow": false,
+  "N_trace_driver_rejections_observed": 0,
+  "radio_counter_deltas": {
+    "Mac": {
+      "tx_retries": 5068,
+      "tx_failed": 304,
+      "rx_drop_misc": 168
+    },
+    "USB": {
+      "tx_retries": 34882,
+      "tx_failed": 294,
+      "rx_drop_misc": 30
+    }
+  },
+  "radio_counter_limits": "Station deltas include all sampled traffic and driver accounting. They are not TCP packet-loss probabilities and do not independently prove on-air failure.",
+  "firmware": "RAM trial using 618 b43 and unchanged CDC mac80211; optional target recorder enabled",
+  "permanent_fix_installed": false,
+  "publication_status": "Working experimental version selected by owner. Diagnostic addition is not an intermittent-failure correction.",
+  "installation_status": "Recorded separately in working-version-installation.json"
+}

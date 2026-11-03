@@ -3,6 +3,7 @@
 #define B43_H_
 
 #include "stall_diag.h"
+#include "nphy_trace.h"
 
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
@@ -1014,6 +1015,7 @@ struct b43_wldev {
 	bool __using_pio_transfers;
 
 	struct b43_stall_diag stall_diag;
+	struct b43_ntrace *ntrace;
 
 	/* Various statistics about the physical device. */
 	struct b43_stats stats;

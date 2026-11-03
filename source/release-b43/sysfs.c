@@ -22,6 +22,8 @@
 #include <linux/module.h>
 #include <net/page_pool/helpers.h>
 #include <linux/jiffies.h>
+#include <linux/etherdevice.h>
+#include <linux/vmalloc.h>
 
 #define GENERIC_FILESIZE	64
 
@@ -593,11 +595,89 @@ static ssize_t stall_defer_show(struct device *device,
 }
 static DEVICE_ATTR_RO(stall_defer);
 
+
+/* Trial-only N-PHY observer, default disabled. No writeable runtime knobs. */
+static char *nphy_trace_peer;
+module_param(nphy_trace_peer, charp, 0400);
+MODULE_PARM_DESC(nphy_trace_peer, "N-PHY bounded header observer transmitter MAC (RAM diagnostic trial)");
+
+static ssize_t nphy_trace_read(struct file *file, struct kobject *kobj,
+ struct bin_attribute *attr, char *buf, loff_t off, size_t count)
+{
+ struct b43_wldev *dev = b43_stall_diag_wldev(kobj_to_dev(kobj));
+ struct b43_ntrace *trace;
+ size_t bytes;
+ if (!capable(CAP_NET_ADMIN)) return -EPERM;
+ if (!dev || !(trace = dev->ntrace)) return -ENODEV;
+ /* sysfs removal excludes readers before allocation release. Records below
+  * acquired used are immutable, so no driver lock or per-packet contention. */
+ bytes = (size_t)smp_load_acquire(&trace->used) * sizeof(trace->records[0]);
+ if (off < 0) return -EINVAL;
+ if (off >= bytes) return 0;
+ count = min_t(size_t, count, bytes - off);
+ memcpy(buf, (u8 *)trace->records + off, count);
+ return count;
+}
+static struct bin_attribute nphy_trace_bin = {
+ .attr = { .name = "nphy_trace", .mode = 0400 },
+ .size = B43_NTRACE_CAPACITY * sizeof(struct b43_ntrace_record),
+ .read = nphy_trace_read,
+};
+static ssize_t nphy_trace_info_show(struct device *device,
+ struct device_attribute *attr, char *buf)
+{
+ struct b43_wldev *dev = b43_stall_diag_wldev(device);
+ struct b43_ntrace *t;
+ if (!capable(CAP_NET_ADMIN)) return -EPERM;
+ if (!dev || !(t = dev->ntrace)) return -ENODEV;
+ return sysfs_emit(buf, "schema=1 endian=little record_bytes=%zu capacity=%u used=%u overflow=%u peer=%pM record_ticks_hz=%u\n",
+   sizeof(t->records[0]), B43_NTRACE_CAPACITY,
+   smp_load_acquire(&t->used), READ_ONCE(t->overflow), t->target, HZ);
+}
+static DEVICE_ATTR_RO(nphy_trace_info);
+static int b43_ntrace_register(struct b43_wldev *dev)
+{
+ struct b43_ntrace *t;
+ u8 target[6];
+ int err;
+ if (dev->phy.type != B43_PHYTYPE_N || !nphy_trace_peer) return 0;
+ if (!mac_pton(nphy_trace_peer, target) || !is_valid_ether_addr(target))
+  return -EINVAL;
+ BUILD_BUG_ON(sizeof(struct b43_ntrace_record) != 208);
+ t = kvzalloc(sizeof(*t), GFP_KERNEL);
+ if (!t) return -ENOMEM;
+ ether_addr_copy(t->target, target);
+ dev->ntrace = t;
+ err = device_create_bin_file(dev->dev->dev, &nphy_trace_bin);
+ if (err) goto fail;
+ err = device_create_file(dev->dev->dev, &dev_attr_nphy_trace_info);
+ if (!err) return 0;
+ device_remove_bin_file(dev->dev->dev, &nphy_trace_bin);
+fail:
+ dev->ntrace = NULL;
+ kvfree(t);
+ return err;
+}
+static void b43_ntrace_unregister(struct b43_wldev *dev)
+{
+ struct b43_ntrace *t;
+ if (!dev->ntrace) return;
+ device_remove_file(dev->dev->dev, &dev_attr_nphy_trace_info);
+ device_remove_bin_file(dev->dev->dev, &nphy_trace_bin);
+ mutex_lock(&dev->wl->mutex);
+ t = dev->ntrace;
+ dev->ntrace = NULL;
+ mutex_unlock(&dev->wl->mutex);
+ kvfree(t);
+}
+
 int b43_stall_diag_register(struct b43_wldev *dev)
 {
 	unsigned int i;
 	int err;
 
+	if (dev->phy.type == B43_PHYTYPE_N)
+        return b43_ntrace_register(dev);
 	if (!b43_stall_diag_enabled || dev->phy.type != B43_PHYTYPE_AC)
 		return 0;
 	for (i = 0; i < B43_SD_COUNT; i++)
@@ -631,6 +711,7 @@ int b43_stall_diag_register(struct b43_wldev *dev)
 
 void b43_stall_diag_unregister(struct b43_wldev *dev)
 {
+    b43_ntrace_unregister(dev);
 	if (dev->stall_diag.registered) {
 		device_remove_file(dev->dev->dev, &dev_attr_stall_defer);
 		device_remove_file(dev->dev->dev, &dev_attr_stall_rxboundary);

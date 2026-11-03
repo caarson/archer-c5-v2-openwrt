@@ -62,7 +62,7 @@
       "sha256": "baf93fe2ae8cdbf824f858e2cf1952eed4ad9a71635a2dc46880d56e76707ee9"
     }
   },
-  "release_b43_sha256": "4130be2b5f191189d6534c4d77a2b1f637b3bd1ec185f1a593e8e249d8436006",
+  "release_b43_sha256": "618552caa7b515954d357f91273576ae716ff26b7e2fc4ef9fb51a82c0b0c7c0",
   "release_mac80211_sha256": "cdcf3316e0220fba0939e7274ae399bfe8c7dbb3deb4ad5c6faac8ee933ba172",
   "previous_b797_release_b43_sha256": "b7970aed0163bd050a7514c7f92803fff9379ce93f7d7b696cb449db84048789",
   "bcm43217_followup": {
@@ -77,5 +77,14 @@
     "nphy_firmware_version": "666.2",
     "ac_firmware_version": "784.2",
     "public_generic_flashable_image": false
+  },
+  "previous_4130_release_b43_sha256": "4130be2b5f191189d6534c4d77a2b1f637b3bd1ec185f1a593e8e249d8436006",
+  "working_version": {
+    "name": "v0.1.1-618",
+    "classification": "experimental/prerelease; functional pass with unresolved historical intermittent failure",
+    "delta": "optional bounded N-PHY header recorder",
+    "normal_recording": "disabled; no nphy_trace_peer",
+    "RAM_qualification_recording": "enabled",
+    "generic_flashable_image": false
   }
 }

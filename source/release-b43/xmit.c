@@ -1331,6 +1331,10 @@ void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
 	bool rx_5ghz;
 	int padding, rate_idx;
 	unsigned int diag_class = 0;
+ struct b43_ntrace_record nt;
+ struct b43_ntrace *trace = dev->ntrace;
+ bool nt_valid = false;
+ u16 nt_disposition = 2; /* default driver rejection, refined below */
 
 	memset(&status, 0, sizeof(status));
 
@@ -1365,6 +1369,24 @@ void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
 	}
 
 	diag_class = b43_rx_class_observe(dev, skb, macstat);
+ if (unlikely(trace)) {
+  unsigned int skip = sizeof(struct b43_plcp_hdr6) +
+                      ((macstat & B43_RX_MAC_PADDING) ? 2 : 0);
+  lockdep_assert_held(&dev->wl->mutex);
+  if (skb_headlen(skb) >= skip)
+   nt_valid = b43_nt_prepare(&nt, skb->data + skip,
+       skb_headlen(skb) - skip, trace->target,
+       (macstat & B43_RX_MAC_DEC) && !(macstat & B43_RX_MAC_DECERR));
+  if (nt_valid) {
+   nt.ticks = (u32)jiffies;
+   nt.macstat = macstat;
+   nt.phy0 = phystat0;
+   nt.phy3 = phystat3;
+   nt.channel = chanstat;
+   nt.wirelen = min_t(unsigned int, skb->len - skip, 65535);
+  }
+ }
+
 
 	if (unlikely(macstat & B43_RX_MAC_FCSERR)) {
 		dev->wl->ieee_stats.dot11FCSErrorCount++;
@@ -1385,8 +1407,10 @@ void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
 	 * notes/50). Those go up, for mac80211 to decrypt or take as they are.
 	 */
 	if ((macstat & B43_RX_MAC_DECERR) &&
-	    (dev->phy.type != B43_PHYTYPE_AC || (macstat & B43_RX_MAC_DEC)))
+	    (dev->phy.type != B43_PHYTYPE_AC || (macstat & B43_RX_MAC_DEC))) {
+        nt_disposition = 3; /* existing hardware decryption-error drop */
 		goto drop;
+    }
 
 	/* Reject incomplete hardware records before any mac80211 state update. */
 	if (dev->phy.type == B43_PHYTYPE_AC &&
@@ -1574,6 +1598,20 @@ void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
 			      !!(status.flag & RX_FLAG_DECRYPTED));
 		b43_rxb_record(&dev->stall_diag.rx_boundary, &sample);
 	}
+
+ if (unlikely(nt_valid)) {
+  u32 index = trace->used;
+  nt.rxflags = status.flag;
+  nt.disposition = 1 /* handoff to existing mac80211 path */;
+  if (index < B43_NTRACE_CAPACITY) {
+   nt.ordinal = index;
+   trace->records[index] = nt;
+   /* Published records are immutable. Reader never observes a partial record. */
+   smp_store_release(&trace->used, index + 1);
+  } else if (trace->overflow != ~0U) {
+   WRITE_ONCE(trace->overflow, trace->overflow + 1);
+  }
+ }
 	memcpy(IEEE80211_SKB_RXCB(skb), &status, sizeof(status));
 	B43_SD_INC(dev, RX_HANDOFF);
 	if (diag_class & B43_RXD_OWN_DATA)
@@ -1604,6 +1642,19 @@ void b43_rx_list(struct b43_wldev *dev, struct sk_buff *skb,
 #endif
 	return;
 drop:
+ if (unlikely(nt_valid)) {
+  u32 index = trace->used;
+  nt.rxflags = status.flag;
+  nt.disposition = nt_disposition;
+  if (index < B43_NTRACE_CAPACITY) {
+   nt.ordinal = index;
+   trace->records[index] = nt;
+   /* Published records are immutable. Reader never observes a partial record. */
+   smp_store_release(&trace->used, index + 1);
+  } else if (trace->overflow != ~0U) {
+   WRITE_ONCE(trace->overflow, trace->overflow + 1);
+  }
+ }
 	B43_SD_INC(dev, RX_DROP);
 	dev_kfree_skb_any(skb);
 }

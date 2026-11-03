@@ -1,0 +1,66 @@
+{
+  "date_utc": "2026-11-03",
+  "status": "INSTALLED_WORKING_EXPERIMENTAL; historical intermittent failure unresolved",
+  "installation_pass": true,
+  "b43_sha256": "618552caa7b515954d357f91273576ae716ff26b7e2fc4ef9fb51a82c0b0c7c0",
+  "prior_b43_sha256": "4130be2b5f191189d6534c4d77a2b1f637b3bd1ec185f1a593e8e249d8436006",
+  "mac80211_sha256": "cdcf3316e0220fba0939e7274ae399bfe8c7dbb3deb4ad5c6faac8ee933ba172",
+  "kernel": "6.12.112",
+  "method": "matching driver replaced atomically in existing persistent JFFS2 overlay, followed by normal reboot; no kernel or raw partition flashing",
+  "normal_persistent_boot_verified": true,
+  "all_other_22_protected_module_config_identities_unchanged": true,
+  "firmware_blob_changes": false,
+  "saved_network_changes": false,
+  "RF_changes": false,
+  "descriptor_or_recovery_behavior_changes": false,
+  "optional_recorder": "disabled: defaultNULL parameter, no trace allocation/sysfs recorder",
+  "RAM_15minute_configuration_difference": "same618 module, target recorder enabled in RAM; this receipt is a separate short recorder-disabled post-install check",
+  "post_install_checks": {
+    "Mac_2_4GHz_verified_flows": 4,
+    "verified_application_bytes": 2000000,
+    "directions": [
+      "download",
+      "upload",
+      "download",
+      "upload"
+    ],
+    "requested_rate_Mbps": 2,
+    "requested_seconds_each": 2,
+    "LuCI_HTTP200": true,
+    "router_DNS": true,
+    "certificate_verified_internet_HTTPS_HTTP200": true,
+    "independent_management_preserved": true,
+    "uplink_authorized": true,
+    "gateway_echo_replies": "3/3",
+    "short_monitor_peak_interval_CPU_percent": 12.94642857142857,
+    "short_monitor_min_MemAvailable_KiB": 68396,
+    "critical_AC_fault_counters": {
+      "tx_bad_cookie": 0,
+      "tx_out_of_order": 0,
+      "tx_skip": 0,
+      "tx_poison": 0,
+      "tx_invalid_bounds": 0,
+      "tx_map_fail": 0,
+      "rx_poison": 0,
+      "rx_alloc_fail": 0,
+      "rx_oversize": 0,
+      "rx_underrun": 0,
+      "tx_second_invalid": 0
+    },
+    "fault_coverage_limit": "AC counters do not cover N-PHY; not a repeated15minute qualification"
+  },
+  "activation_checker_history": {
+    "precautionary_rollbacks": 2,
+    "cause": "Checker required unsupported sysfs build-id, then expected an empty rather than(null) parameter representation",
+    "router_had_returned_healthy_in_both_records": true,
+    "corrected_checks_passed": true,
+    "driver_source_or_binary_changes_between_attempts": false
+  },
+  "rollback": "Previous4130 module preserved externally on both control hosts; ROM fallback is olderb797, not4130",
+  "public_generic_flashable_image": false,
+  "limits": [
+    "Working is a lab designation, not proof the intermittent issue is fixed.",
+    "No long-term or public-production availability certification.",
+    "No stable250Mbps qualification or2.4GHz802.11n claim."
+  ]
+}

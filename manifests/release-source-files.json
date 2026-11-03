@@ -20,9 +20,9 @@
     "origin": "Exact qualified release-b43 effective source"
   },
   "source/release-b43/b43.h": {
-    "sha256": "df673fc4a6fbe156b7923a04a5fa68255585d6d0e4e08820dbf967e8f05246ca",
-    "bytes": 52584,
-    "origin": "Exact qualified release-b43 effective source"
+    "sha256": "ffafdff536d401032d86d082e8782264a9913f488798d87286a8bc1769cebe45",
+    "bytes": 52636,
+    "origin": "618 working experimental source: installed4130 plus optional bounded N-PHY diagnostic recorder"
   },
   "source/release-b43/stall_diag.h": {
     "sha256": "dfe7e73e142355a7e09a72acefa347aa1acc276f68ff8d3fdae07b4909a74464",
@@ -55,14 +55,14 @@
     "origin": "BCM43217 EPA initialization correction on qualified b797 source; same AC data path"
   },
   "source/release-b43/sysfs.c": {
-    "sha256": "1b4191fe1981a7f930beb1410f88c81c93391fe7e54e52e8474e43690b6895c9",
-    "bytes": 22721,
-    "origin": "Exact qualified release-b43 effective source"
+    "sha256": "39cbdf8bf933918d6411c5fe15cb6c1b0bf353cc31f8ef88c51bb6194ecf24cd",
+    "bytes": 25721,
+    "origin": "618 working experimental source: installed4130 plus optional bounded N-PHY diagnostic recorder"
   },
   "source/release-b43/xmit.c": {
-    "sha256": "d307e1f7fce168ad98630e00ed43b1ae78ef45b3f90a53066b7ce3dd73861432",
-    "bytes": 55882,
-    "origin": "Exact qualified release-b43 effective source"
+    "sha256": "8515fbe99ed6a5a58594bab741e3f430cc2cbc776388dd254bea75daf49ef31f",
+    "bytes": 57624,
+    "origin": "618 working experimental source: installed4130 plus optional bounded N-PHY diagnostic recorder"
   },
   "source/release-b43/bus.h": {
     "sha256": "2aae80b89be738f82861cd305a69808bc09fefe6362913873b0b6ef6520b3e27",
@@ -1948,5 +1948,15 @@
     "sha256": "c9e933379b251f1c7941d1e3ed0bc389bf2ec17911390d336ca24158f1121935",
     "bytes": 3182,
     "origin": "BCM43217 follow-up source correction or focused offline test; hardware limitations documented"
+  },
+  "source/release-b43/nphy_trace.h": {
+    "sha256": "27a29335e96ab4544fc4ef7ef855ae84b6c4ae9821272556330b0fa4ffae1e0e",
+    "bytes": 250,
+    "origin": "618 working experimental source: installed4130 plus optional bounded N-PHY diagnostic recorder"
+  },
+  "source/release-b43/nphy_trace_parse.h": {
+    "sha256": "7032007be2926a7d96346dbb66a31c0d27b64ac03c9f0b7e947ef6168d2e6080",
+    "bytes": 2300,
+    "origin": "618 working experimental source: installed4130 plus optional bounded N-PHY diagnostic recorder"
   }
 }

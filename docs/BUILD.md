@@ -73,3 +73,7 @@ cc -Wall -Wextra -Werror -fsanitize=address,undefined tests/test_bcm43217_epa_ro
 cc -Wall -Wextra -Werror -Wno-misleading-indentation -fsanitize=address,undefined tests/test_bcm43217_auxadc.c -o /tmp/c5-adc-test
 /tmp/c5-adc-test
 ```
+
+## 618 working-version source
+
+The current effective b43 snapshot adds `patches/release/nphy-bounded-flow-observer.patch` to 4130. The historical aggregate baseline-to-qualified patch stops at 4130; apply the observer delta afterward to reconstruct 618 from the original baseline. The current effective source snapshot already includes both. Do not apply the patches again to that snapshot. The exact selected b43 hash is `618552caa7b515954d357f91273576ae716ff26b7e2fc4ef9fb51a82c0b0c7c0`; CDC and the kernel ABI are unchanged. `nphy_trace_peer` is omitted from the normal module parameters, leaving recording disabled and its 3,407,888-byte allocation absent. This source prerelease still does not provide a public generic flashable image.
